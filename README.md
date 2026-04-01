@@ -1,1 +1,1 @@
-# Dual Ressource Constrained Scheduling Problem
+# Dual Resource Constrained Scheduling Problem
