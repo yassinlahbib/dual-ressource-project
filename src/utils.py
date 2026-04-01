@@ -214,10 +214,10 @@ def gantt_chart(solution, instance, color_print="Job"):
 
     
     fig.layout.xaxis.type = "linear" # for having numeric x-axis instead of date
-    fig.write_html('gantt_chart.html', auto_open=True) 
+    fig.write_html('../results/gantt_chart.html', auto_open=True) 
             
 
 if __name__ == "__main__":
-    file_path = "data_2.test"
+    file_path = "../data/data_2.test"
     data = read_file(file_path)
     print(data)
