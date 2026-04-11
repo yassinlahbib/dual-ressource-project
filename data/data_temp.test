@@ -1,0 +1,74 @@
+<number of jobs>
+2
+
+<number of professions>
+3
+
+<professions detailed>
+2 4 1
+
+# Les valeurs de -1 dans la section suivante indiquent que la sous opération ne peut être fait dans ce mode opératioire
+# exemple: -1 pour la collaboration, signifie que la sous-opération ne peut être fait en collaboration
+# Appartenance aux métier m_i
+# difficulté de la sous-opération, temps en solo, temps en apprentissage, temps en collaboration
+<sub_op(difficulty and times)>
+m1
+1 3 4 2
+1 15 15 -1
+m2
+3 5 8 2
+3 4 6 2
+2 5 10 2
+2 4 11 2
+m3
+2 10 20 2
+
+# nombre d'opération maximal par Job
+<maximal number of operations>
+2
+
+# nombre de sous-opération maximal par opération
+<maximal number of sub-operations per operation>
+3
+
+<number of workers>
+3
+
+# niveau de compétence des travailleurs pour chaque métier
+<levels workers>
+1 2 1
+4 3 2
+1 2 1
+
+# structure complète d'un job
+# job J_i
+# opération 1 de J_i : index des sous opérations qui constitue l'opération 1
+# opération 2 de J_i : index des sous opérations qui constitue l'opération 2
+# etc ...
+<jobs>
+J1
+1 3 7
+3
+J2
+4 2
+7 5 5
+
+# Pas pris en compte pour le moment
+<difficulty of jobs>
+2 2
+
+# Modélisé avec matrice d'adjacence, beaucoup de 0
+# prend plus de mémoire mais plus rapide pour vérifier les contraintes de précédence
+# prend plus de temps pour dessiner graphe de precedence, car il faut parcourir toute la matrice d'adjacence pour trouver les arcs
+<precedence constraints of operations>
+J1
+1,2
+<1>
+1,2
+2,3
+<2>
+J2
+2,1
+<1>
+1,2
+<2>
