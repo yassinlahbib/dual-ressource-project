@@ -1,6 +1,6 @@
 import gurobipy as gp
 from gurobipy import GRB
-from utils import read_file, gantt_chart, plot_levels_workers
+from utils import *
 import numpy as np
 import time
 
@@ -70,12 +70,59 @@ class Instance:
                f"-------------------------------------\n")
         return res
 
+COEF_LEARNING = 0.5
+COEF_TUTOR = 0.7
+COEF_APPRENTI = 0.3
+COEF_COLLAB = 0.5
+LEVEL_MAX = 4
+
+# temps de la période courante considéré par le PL_i
+BORN_SUP_MAKESPAN = 20 # on se fixe une durée de 20 unités de temps pour réaliser les taches sur la période courante. Les taches qui dépassent cette duré seront considéré comme une pénalité dans le calcul du makespan et pourront être traité dans une autre période
+
+# Si la période est une semaine alors il faut contraindres les taches à se réaliser dans un intervalle de temps de 5 jours par exemple à des heures de travail 
+
+
+
+# class Multi_Periode_Model:
+#     def __init__(self, instance, nb_periodes):
+#         self.instance = instance
+#         self.nb_periodes = nb_periodes
+    
+#     def _build_model(self, objective, weight, priority):
+
+#         models_periodes = []
+#         for i in range(self.nb_periodes):
+#             m = Model(self.instance)
+#             m._build_model(objective, weight, priority)
+#             models_periodes.append(m)
+
+    
 
 class Model:
     def __init__(self, instance):
         self.instance = instance
 
-    def _build_model(self, objective, weight, priority):
+    def write_objectives_values(self, m, nObjectives, file_name):
+        """
+        Ecrit la valeur de chaque objectif dans un fichier texte
+        Args:
+            m (gurobi.Model): le modèle gurobi après optimisation
+            nObjectives (int): le nombre d'objectifs du modèle
+            file_name (str): le nom du fichier dans lequel écrire les valeurs des objectifs
+        Returns:
+            None
+        """
+        with open(file_name, 'w') as f:
+            print("ici -> ", nObjectives)
+            if nObjectives == 1:
+                f.write(f"Obj: {m.ObjVal}\n")
+            else: 
+                for o in range(nObjectives):
+                    m.params.ObjNumber = o
+                    f.write(f"Obj{o}: {m.ObjNVal}\n")
+        f.close()
+
+    def _build_model(self, objective, weight, priority, time_limit=None):
         """
         Construit le modèle de programmation linéaire
         
@@ -84,7 +131,8 @@ class Model:
             weight (list): les poids à accorder à chaque objectifs (makespan, skill) si objective = "both", n'est pas utilisé sinon
             priority (list): la priorité à accorder à chaque objectif (makespan, skill) si objective = "lexicographic", n'est pas utilisé sinon
             verbose (bool): si True, affiche les informations sur les solutions trouvées par Gurobi
-            
+            time_limit (int): la limite de temps pour l'optimisation
+
         Returns:
             m (gp.Model): le modèle de programmation linéaire construit
         """
@@ -144,12 +192,54 @@ class Model:
         # y = m.addVars(self.instance.nb_workers,self.instance.nb_sub_operations, vtype=GRB.INTEGER, name="y") # y[k] = number of sub-operations assigned to worker k
         l = m.addVars(self.instance.nb_workers, self.instance.nb_professions, vtype=GRB.CONTINUOUS, name="l") # l[k,m] = level of worker k before performing metier m after run of the PL
         f = m.addVars(keys, vtype=GRB.CONTINUOUS, name="f") # f[i,j,s,k] = completion time of operation j of job i if assigned to worker k -- Ajout de cette variable pour prendre en compte le fait que la duré d'une tache peut etre different selon si fait en solo, en apprentissage ou en collab
-        # nb_w_to = m.addVars(keys_without_k, vtype=GRB.INTEGER, name="nb_w_to_ijs") # nb_w_to_ijs[i,j,s] = number of workers assigned to O_ijs
         z_auxilary = m.addVars(keys_z, vtype=GRB.INTEGER, name="z_auxilary") # z[i,j,s,0] = 1 if O_ijs is done in solo, z[i,j,s,1] = 1 if O_ijs is done in apprentissage
         
         # Linearisation min pour savoir si une tache est fait en apprentissage ou en collab
         Level_min = m.addVars(keys_without_k, vtype=GRB.CONTINUOUS, name="Level_min") #vaut le level min d'un worker sur O_ijs
         Delta_min = m.addVars(keys, vtype=GRB.BINARY, name="Delta_min") # pour linearisation du min
+
+
+        # Pour la partie Ergonomie (Faire augmenter le niveau de fatigue cognitif des workers qui enseignent des taches pour lesquelles ils ont le niveau requis)
+        
+        ## tutor part
+        is_tutor = m.addVars(keys, vtype=GRB.BINARY, name="is_tutor") # is_tutor[i,j,s,k] = 1 si O_ijs est fait par k avec un apprenti
+        has_level = m.addVars(keys, vtype=GRB.BINARY, name="has_level") # has_level[i,j,s,k] = 1 si k à le niveau de compétence requis pour faire O_ijs
+        cognitive_load_tutors = m.addVars(self.instance.nb_workers, self.instance.nb_professions, vtype=GRB.CONTINUOUS, name="cognitive_load_tutors") # cognitive_load_tutors[k,m] = charge cognitive de worker k pour le métier m si il fait une tache de ce metier avec un apprenti
+        
+        ## apprenti part
+        is_apprenti = m.addVars(keys, vtype=GRB.BINARY, name="is_apprenti") # is_apprenti[i,j,s,k] = 1 si O_ijs est fait par k en apprentissage
+        cognitive_load_apprentis = m.addVars(self.instance.nb_workers, self.instance.nb_professions, vtype=GRB.CONTINUOUS, name="cognitive_load_apprentis") # cognitive_load_apprentis[k,m] = charge cognitive de worker k pour le métier m si il fait une tache de ce metier en apprentissage
+
+        ## collaboration part
+        is_collab = m.addVars(keys, vtype=GRB.BINARY, name="is_collab") # is_collab[i,j,s,k] = 1 si O_ijs est fait par k en collaboration
+        cognitive_load_collaboration = m.addVars(self.instance.nb_workers, self.instance.nb_professions, vtype=GRB.CONTINUOUS, name="cognitive_load_collaboration") # cognitive_load_collaboration[k,m] = charge cognitive de worker k pour le métier m si il fait une tache de ce metier en collaboration
+
+        ## load tutor + load collab + load apprenti
+        cognitive_load_total = m.addVars(self.instance.nb_workers, self.instance.nb_professions, vtype=GRB.CONTINUOUS, name="cognitive_load_total") # somme des charge cognitive de tutorat et de collaboration pour chaque worker et chaque métier, utilisé pour l'objectif de minimisation de la charge cognitive
+        
+
+        ## Pénalité pour les taches qui dépassent la durée de la période courante - Si toutes les taches ne peuvent être réalisées dans la période considérée
+        # si une tache dépasse la durée de la période courante, elle est considéré comme une pénalité dans le calcul du makespan et pourra être traité dans une autre période
+        penalite_time = m.addVar(vtype=GRB.CONTINUOUS, lb=-GRB.INFINITY, name="penalite_time") # pénalité pour les taches qui dépassent la durée de la période courante, utilisé pour le multi-période
+
+        # Variable permettant de savoir si une tache à débuter avant la date limite BORN_SUP_MAKESPAN
+        # Pour faire en sorte que cette tache doit se terminer avant la date limite BORN_SUP_MAKESPAN ou alors si elle dépasse cette date ajouté en pénalité
+        in_time = m.addVars(keys, vtype=GRB.BINARY, name="in_time") # in_time[i,j,s,k] = 1 si O_ijs commence avant la date limite BORN_SUP_MAKESPAN
+
+
+        #######################################################################
+        ######################### VARIBALES PROGRAMME #########################
+        #######################################################################
+
+        # variable du programme permettant de caluler le nombre de tache fait par k avec un apprenti pour les tache de métier m
+        tab_count_tasks_has_tutor = [ [0 for m in range(self.instance.nb_professions)] for k in range(self.instance.nb_workers) ] 
+
+        # variable du programme permettant de caluler le nombre de tache fait par k en collab pour les tache de métier m
+        tab_count_tasks_with_collab = [ [0 for m in range(self.instance.nb_professions)] for k in range(self.instance.nb_workers) ] 
+
+        # variable du programme permettant de caluler le nombre de tache fait en tant qu'apprenti par k pour les tache de métier m
+        tab_count_tasks_has_apprenti = [ [0 for m in range(self.instance.nb_professions)] for k in range(self.instance.nb_workers) ]
+
 
 
         M = 10000
@@ -305,10 +395,12 @@ class Model:
                                         index_s = self.instance.jobs_struct[i][j][s]
                                         index_z = self.instance.jobs_struct[h][g][z]
 
-                                        f_hgzk = d[h,g,z,k] + self.instance.sub_operations_times[index_z][0] * z_auxilary[h,g,z,0] + self.instance.sub_operations_times[index_z][1] * z_auxilary[h,g,z,1] + self.instance.sub_operations_times[index_z][2] * z_auxilary[h,g,z,2] - M * (1 - x[h, g, z, k])
-                                        f_ijsk = d[i,j,s,k] + self.instance.sub_operations_times[index_s][0] * z_auxilary[i,j,s,0] + self.instance.sub_operations_times[index_s][1] * z_auxilary[i,j,s,1] + self.instance.sub_operations_times[index_s][2] * z_auxilary[i,j,s,2] - M * (1 - x[i, j, s, k])
+                                        f_hgzk = d[h,g,z,k] + self.instance.sub_operations_times[index_z][0] * z_auxilary[h,g,z,0] + self.instance.sub_operations_times[index_z][1] * z_auxilary[h,g,z,1] + self.instance.sub_operations_times[index_z][2] * z_auxilary[h,g,z,2]  - M * (1 - x[h, g, z, k])
+                                        f_ijsk = d[i,j,s,k] + self.instance.sub_operations_times[index_s][0] * z_auxilary[i,j,s,0] + self.instance.sub_operations_times[index_s][1] * z_auxilary[i,j,s,1] + self.instance.sub_operations_times[index_s][2] * z_auxilary[i,j,s,2]  - M * (1 - x[i, j, s, k])
                                         
 
+                                        ## !!!!!!!!!!!!!!!!
+                                        ## !!!!!!!!!!!!!!!!
                                         # En mettant == j'ai status.code = 4 de Gurobi (non borné), en mettant >= j'ai status.code = 2 (optimal)
                                         # donc le solveur force f[x1,x2,x3,x4] à être petit
                                         m.addConstr(f[h,g,z,k] >= d[h,g,z,k] + self.instance.sub_operations_times[index_z][0] * z_auxilary[h,g,z,0] + self.instance.sub_operations_times[index_z][1] * z_auxilary[h,g,z,1] + self.instance.sub_operations_times[index_z][2] * z_auxilary[h,g,z,2] - M * (1 - x[h, g, z, k]))
@@ -407,8 +499,17 @@ class Model:
                             
                             # La contrainte suivante permet de modéliser que si cette tache est fait par x_ijs et n'a pas le niveau alors l'autre personne avec lui doit l'avoir
                             m.addConstr((gp.quicksum(x[i,j,s,k_prime] * self.instance.levels_workers[k_prime][index_m] for k_prime in range(self.instance.nb_workers) if k_prime != k)) >= self.instance.sub_operations_difficulties[index_s] * x[i,j,s,k], name=f"at_least_one_worker_with_capacity_{i}_{j}_{s}_{k}") # if worker k do the sub op and he dont have the levels for it, at least one of the other workers assigned to the same sub-op must have the level for it
+
+
+                            m.addConstr((gp.quicksum(x[i,j,s,k_prime] * self.instance.levels_workers[k_prime][index_m] for k_prime in range(self.instance.nb_workers) if k_prime != k)) >= self.instance.sub_operations_difficulties[index_s] * x[i,j,s,k], name=f"at_least_one_worker_with_capacity_{i}_{j}_{s}_{k}") # if worker k do the sub op and he dont have the levels for it, at least one of the other workers assigned to the same sub-op must have the level for it
+
+
+
         
+
+
         # # constraint : count number of sub-operations assigned to each worker k and each sub-operation s
+        # INUTILE POUR LE MOMENT 
         # # I try this for the learning effect
         # count = [ [0 for s in range(self.instance.nb_sub_operations)] for k in range(self.instance.nb_workers) ] # count[k][s] = number of sub-operations assigned to worker k
         # for i in range(self.instance.nb_jobs):
@@ -457,70 +558,177 @@ class Model:
                                 # print(f"l[{k}, {metier}] <= {self.instance.levels_workers[k][metier]} + 1")
                                 # print(f"l[{k}, {metier}] <= 4")
 
-                m.addConstr((l[k,metier] <= self.instance.levels_workers[k][metier] + all_sub_op_m_learning*0.5), name=f"learning_effect_w{k}_metier{metier}") # learning effect for metier metier
+                m.addConstr((l[k,metier] <= self.instance.levels_workers[k][metier] + all_sub_op_m_learning*COEF_LEARNING), name=f"learning_effect_w{k}_metier{metier}") # learning effect for metier metier
                 # contrainte suivante peut etre omis ?
                 m.addConstr((l[k,metier] <= self.instance.levels_workers[k][metier] + 1), name=f"max_learning_effect_w{k}_metier{metier}") # max learning effect for metier metier
                 m.addConstr((l[k,metier] >= self.instance.levels_workers[k][metier]), name=f"min_level_metier{metier}") # level of worker k for metier metier can not be less than the initial level of worker k for metier metier
-                m.addConstr((l[k,metier] <= 4), name=f"max_level_metier{metier}") # level of worker k for metier metier can not be more than 4 because the max difficulty of sub-op is 4
+                m.addConstr((l[k,metier] <= LEVEL_MAX), name=f"max_level_metier{metier}") # level of worker k for metier metier can not be more than 4 because the max difficulty of sub-op is 4
                         
             
-            
-            # for s in range(len(self.instance.difficulty_sub_op)): # We fix a worker and a sub_op
-            #     print(f"w_{k}  --  sous op {s}")
-                
-            #     all_sub_op_m = 0 # number of times worker k do the sub_op in m
-            #     for i in range(self.instance.nb_jobs):
-            #         for j in range(len(self.instance.jobs_struct[i])):
-            #             for s in range(len(self.instance.jobs_struct[i][j])):
-            #                 index_s = self.instance.jobs_struct[i][j][s]
-            #                 if index_sub_op == s :
-            #                     all_sub_op_s += x[i,j,sub_op,k] # number of times worker k do the sub_op s
-            #                     print(f"index_sub_op = {index_sub_op}, s = {s}, sub_op = {sub_op}")
-                                
-            #     # savoir toute les opération de m que le worker à éffectué auquel il n'avait pas la compétence
-            #     m.addConstr((l[k,m]) == self.instance.levels_workers[k][m] + all_sub_op_m*0.5)
-
-
-            #     m.addConstr((l[k,s] <= self.instance.levels_workers[k][s] + all_sub_op_s*1.1 ), name=f"learning_effect_w{k}_subop{s}") # learning effect
-            #     m.addConstr((l[k,s] >= self.instance.levels_workers[k][s]), name=f"min_level_w{k}_subop{s}") # level of worker k for sub-op s can not be less than the initial level of worker k for sub-op s
-            #     m.addConstr((l[k,s] <= self.instance.levels_workers[k][s] + 1), name=f"max_level_w{k}_subop{s}") # max level of worker k for sub-op s can not be more than 1 unit higher than the initial level of worker k for sub-op s
-            #     m.addConstr((l[k,s] <= 4), name=f"max_level_sub_op{s}") # level of worker k for sub-op s can not be more than the difficulty of sub-op s
-
-
-
-        # # constraint :
-        # for i in range(self.instance.nb_jobs):
-        #     for j in range(len(self.instance.jobs_struct[i])):
-        #         for s in range(len(self.instance.jobs_struct[i][j])):
-        #             for k in range(self.instance.nb_workers):
-
-
-        # m.addConstr((C_max <= 60), name="max_makespan")
-
-
-        ########################################################################
-        ########################### OBJECTIVE FUNCTION #########################
-        ########################################################################
         
+
+########################################################################
+############################## Ergonomie ###############################
+########################################################################
+
+
+    ################################     
+    ####### TUTOR / APPRENTI #######
+    ################################
+
+        # contrainte pour savoir si un worker k à le niveau de compétence requis pour faire la tache O_ijs
+        for i in range(self.instance.nb_jobs):
+            for j in range(len(self.instance.jobs_struct[i])):
+                for s in range(len(self.instance.jobs_struct[i][j])):
+                    for k in range(self.instance.nb_workers):
+                        index_s = self.instance.jobs_struct[i][j][s]
+                        index_m = self.instance.sub_op_to_m[index_s]
+                        m.addConstr((self.instance.levels_workers[k][index_m] + M * (1 - has_level[i,j,s,k]) >= self.instance.sub_operations_difficulties[index_s]), name=f"definition_theta_{i}_{j}_{s}_{k}") # if worker k has the level required -> tetha_ijsk = 0 or 1, if worker k doesn't have the level required -> tetha_ijsk = 0
+                        m.addConstr((self.instance.levels_workers[k][index_m] - M * has_level[i,j,s,k] <= self.instance.sub_operations_difficulties[index_s] - 1e-1), name=f"definition_theta2_{i}_{j}_{s}_{k}") # if worker k has the level required -> tetha_ijsk = 1, if worker k doesn't have the level required -> tetha_ijsk = 0 or 1
+                    
+
+        # contrainte pour savoir si k à fait la tache O_ijs en tant que TUTEUR
+        # linéarisation du ET LOGIQUE
+        # is_tutor_ijsk = x_ijsk AND z_ijs1 AND has_level_ijsk
+        for i in range(self.instance.nb_jobs):
+            for j in range(len(self.instance.jobs_struct[i])):
+                for s in range(len(self.instance.jobs_struct[i][j])):
+                    for k in range(self.instance.nb_workers):
+                        index_s = self.instance.jobs_struct[i][j][s]
+                        index_m = self.instance.sub_op_to_m[index_s]
+                        m.addConstr((is_tutor[i,j,s,k] <= x[i,j,s,k]), name=f"definition_tutor_{i}_{j}_{s}_{k}")
+                        m.addConstr((is_tutor[i,j,s,k] <= z_auxilary[i,j,s,1]), name=f"definition_tutor2_{i}_{j}_{s}_{k}")
+                        m.addConstr((is_tutor[i,j,s,k] <= has_level[i,j,s,k]), name=f"definition_tutor3_{i}_{j}_{s}_{k}")
+                        m.addConstr((is_tutor[i,j,s,k] >= x[i,j,s,k] + z_auxilary[i,j,s,1] + has_level[i,j,s,k] - 2), name=f"definition_tutor4_{i}_{j}_{s}_{k}")
+                        tab_count_tasks_has_tutor[k][index_m] += is_tutor[i,j,s,k] # nombre de taches en tant que tuteur de metier m pour le worker k
+
+        # contrainte pour savoir si k à fait la tache O_ijs en tant qu'APPRENTI
+        # is_apprenti_ijsk = x_ijsk AND z_ijs1 AND (1 - has_level_ijsk)
+        for i in range(self.instance.nb_jobs):
+            for j in range(len(self.instance.jobs_struct[i])):
+                for s in range(len(self.instance.jobs_struct[i][j])):
+                    for k in range(self.instance.nb_workers):
+                        index_s = self.instance.jobs_struct[i][j][s]
+                        index_m = self.instance.sub_op_to_m[index_s]
+                        m.addConstr((is_apprenti[i,j,s,k] <= x[i,j,s,k]), name=f"definition_app_{i}_{j}_{s}_{k}")
+                        m.addConstr((is_apprenti[i,j,s,k] <= z_auxilary[i,j,s,1]), name=f"definition_app2_{i}_{j}_{s}_{k}")
+                        m.addConstr((is_apprenti[i,j,s,k] <= 1 - has_level[i,j,s,k]), name=f"definition_app3_{i}_{j}_{s}_{k}")
+                        m.addConstr((is_apprenti[i,j,s,k] >= x[i,j,s,k] + z_auxilary[i,j,s,1] - has_level[i,j,s,k] - 1), name=f"definition_app4_{i}_{j}_{s}_{k}")
+                        tab_count_tasks_has_apprenti[k][index_m] += is_apprenti[i,j,s,k] # nombre de taches den tant que apprenti de metier m pour le worker k
+
+        
+
+        # contrainte pour calculer la charge cognitive des tuteurs lorsqu'il apprennent une tache à un apprenti
+        m.addConstrs((cognitive_load_tutors[k,metier] == tab_count_tasks_has_tutor[k][metier] * COEF_TUTOR for k in range(self.instance.nb_workers) for metier in range(self.instance.nb_professions)), name="count_tutor_tasks")
+
+        # contrainte pour calculer la charge cognitive des apprentis lorsqu'ils apprennent une tache avec un tuteur
+        m.addConstrs((cognitive_load_apprentis[k,metier] == tab_count_tasks_has_apprenti[k][metier] * COEF_APPRENTI for k in range(self.instance.nb_workers) for metier in range(self.instance.nb_professions)), name="count_apprenti_tasks")
+
+
+
+    ######################
+    ####### COLLAB #######
+    ######################
+        ## normalement pas besoin de verif s'ils ont bien le niveau
+        for i in range(self.instance.nb_jobs):
+            for j in range(len(self.instance.jobs_struct[i])):
+                for s in range(len(self.instance.jobs_struct[i][j])):
+                    for k in range(self.instance.nb_workers):
+                        index_s = self.instance.jobs_struct[i][j][s]
+                        index_m = self.instance.sub_op_to_m[index_s]
+                        # Linéarisation du ET LOGIQUE pour savoir si la tache O_ijs est fait en collab par le worker k
+                        # is_collab_ijsk = x_ijsk AND z_ijs2 : Si k à fait la tache et que cette tache est fait en collab
+                        m.addConstr((is_collab[i,j,s,k] <= x[i,j,s,k]), name=f"definition_collab_{i}_{j}_{s}_{k}")
+                        m.addConstr((is_collab[i,j,s,k] <= z_auxilary[i,j,s,2]), name=f"definition_collab2_{i}_{j}_{s}_{k}")
+                        m.addConstr((is_collab[i,j,s,k] >= x[i,j,s,k] + z_auxilary[i,j,s,2] - 1), name=f"definition_collab3_{i}_{j}_{s}_{k}")
+                        tab_count_tasks_with_collab[k][index_m] += is_collab[i,j,s,k]
+
+        m.addConstrs((cognitive_load_collaboration[k,metier] == tab_count_tasks_with_collab[k][metier] * COEF_COLLAB for k in range(self.instance.nb_workers) for metier in range(self.instance.nb_professions)), name="count_collaboration_tasks")
+
+    ###### SUM OF COGNITIVE LOADS ######
+        # J'ai ajouté nouveau tableau de variable, mais pourrait etre fait dans la fonction objectif directement en sommant les trois charges cognitives !!
+        # A voir ce qui est plus simple pour la résolution du modèle
+        m.addConstrs((cognitive_load_total[k,metier] == cognitive_load_tutors[k,metier] + cognitive_load_collaboration[k,metier] + cognitive_load_apprentis[k,metier] for k in range(self.instance.nb_workers) for metier in range(self.instance.nb_professions)), name="cognitive_load_total")
+
+
+# ############# BORNE SUP REALISABLE DU MAKESPAN #############
+
+#         m.addConstr((C_max <= BORN_SUP_MAKESPAN + penalite_time), name="born_sup_makespan")
+
+# ########### Une tache (considérer jobs ou opérations ou sous-opérations) qui commence avant la date limite BORN_SUP_MAKESPAN doit se terminer avant celle ci
+# ## -> forcer cette contrainte en dure pour le moment mais voir si on peut autoriser mais grande pénalité si on la dépasse pour ne pas rendre le modèle infaisable
+#         for i in range(self.instance.nb_jobs):
+#             for j in range(len(self.instance.jobs_struct[i])):
+#                 for s in range(len(self.instance.jobs_struct[i][j])):
+#                     for k in range(self.instance.nb_workers):
+                        
+#                         # in_time[i,j,s,k] = 1 alors d[i,j,s,k] <= BORN_SUP_MAKESPAN, 0 sinon
+#                         # Si k ne fait pas la tache O_ijs -> in_time[i,j,s,k] = 1
+#                         m.addConstr((d[i,j,s,k] >= BORN_SUP_MAKESPAN - M * in_time[i,j,s,k]), name=f"start_time_before_deadline_{i}_{j}_{s}_{k}")
+#                         m.addConstr((d[i,j,s,k] <= BORN_SUP_MAKESPAN + M * (1 - in_time[i,j,s,k])), name=f"start_time_before_deadline2_{i}_{j}_{s}_{k}")
+
+#                         index_s = self.instance.jobs_struct[i][j][s]
+#                         # si k fait la tache : f_ijsk vrai fin
+#                             # si in_time = 1 -> f_ijsk doit se terminer avant OK
+#                             # si in_time = 0 -> f_ijsk non contraint par cette coontrainte OK
+#                         # si k ne fait pas la tache : f_ijsk = - M <= BORN_SUP_MAKESPAN donc OK
+
+#                         f_ijsk = d[i,j,s,k] + self.instance.sub_operations_times[index_s][0] * z_auxilary[i,j,s,0] + self.instance.sub_operations_times[index_s][1] * z_auxilary[i,j,s,1] + self.instance.sub_operations_times[index_s][2] * z_auxilary[i,j,s,2] - M * (1 - x[i,j,s,k])
+#                         m.addConstr((f_ijsk <= BORN_SUP_MAKESPAN + M * (1 - in_time[i,j,s,k])), name=f"end_time_before_deadline_{i}_{j}_{s}_{k}")
+                    
+
+        # Probleme sur les variable de f [i,j,s,k] elles sont supérieur à la fin de la date de debut + temps process 
+        # -> s'il fait la tache f <= d + times
+        # si il fait pas f <= 0
+        for i in range(self.instance.nb_jobs):
+            for j in range(len(self.instance.jobs_struct[i])):
+                for s in range(len(self.instance.jobs_struct[i][j])):
+                    for k in range(self.instance.nb_workers):
+                        index_s = self.instance.jobs_struct[i][j][s]
+                        time = d[i,j,s,k] + self.instance.sub_operations_times[index_s][0] * z_auxilary[i,j,s,0] + self.instance.sub_operations_times[index_s][1] * z_auxilary[i,j,s,1] + self.instance.sub_operations_times[index_s][2] * z_auxilary[i,j,s,2]
+                        m.addConstr((f[i,j,s,k] <= time), name=f"definition_f_{i}_{j}_{s}_{k}") # s'il fait la tache f <= d + times, s'il la fait pas f est libre AVOIR SI DERANGEANT
+                        # m.addConstr(())
+
+########################################################################
+########################### OBJECTIVE FUNCTION #########################
+########################################################################
+        if time_limit is not None:
+            m.Params.TimeLimit = time_limit
+
+        m.Params.SolFiles = "../results/intermediate_solutions.sol"
+        # cognitive_load_tutors_obj = gp.quicksum(cognitive_load_tutors[k, metier] for k in range(self.instance.nb_workers) for metier in range(self.instance.nb_professions))
+        # cognitive_load_collab_obj = gp.quicksum(cognitive_load_collaboration[k, metier] for k in range(self.instance.nb_workers) for metier in range(self.instance.nb_professions))
+        cognitive_load_total_obj = gp.quicksum(cognitive_load_total[k, metier] for k in range(self.instance.nb_workers) for metier in range(self.instance.nb_professions))
+        skill_obj = gp.quicksum(l[k,metier] for k in range(self.instance.nb_workers) for metier in range(self.instance.nb_professions))
+
         if objective == "makespan":
             m.setObjective(C_max, GRB.MINIMIZE)
+            # m.setObjective(penalite_time, GRB.MINIMIZE)
+        
+        elif objective == "cognitive_load_total":
+            m.setObjective(cognitive_load_total_obj, GRB.MINIMIZE)
 
-        else :
-            skill_obj = gp.quicksum(l[k,metier] for k in range(self.instance.nb_workers) for metier in range(self.instance.nb_professions))
-            
-            if objective == "skill":
-                m.setObjective(skill_obj, GRB.MAXIMIZE)
+        # lorsque l'on optimise le skill, une fois optimisé on cherche à minimiser le makespan pour ne pas avoir de soultions abbérantes
+        elif objective == "skill": 
+            m.setObjectiveN(skill_obj, priority=1, name="maximize_skill_levels")
+            m.setObjectiveN(- C_max, priority=0, name="minimize_makespan")
+            GRB.MINIMIZE
 
-            elif objective == "lexicographic":
-                m.setObjectiveN(C_max, index=0, priority=priority[0], name="minimize_makespan")
-                m.setObjectiveN(-skill_obj, index=1, priority=priority[1], name="maximize_skill_levels")
-                m.modelSense = GRB.MINIMIZE
+        elif objective == "lexicographic":
+            m.setObjectiveN(C_max, index=0, priority=priority[0], name="minimize_makespan")
+            m.setObjectiveN(-skill_obj, index=1, priority=priority[1], name="minimize_minus_skill_levels")
+            m.setObjectiveN(cognitive_load_total_obj, index=2, priority=priority[2], name="minimize_cognitive_load_total")
+            m.modelSense = GRB.MINIMIZE
 
-            elif objective == "both":
-                m.setObjectiveN(C_max, index=0, weight=weight[0], name="minimize_makespan")
-                m.setObjectiveN(-skill_obj, index=1, weight=weight[1], name="maximize_skill_levels")
-                m.modelSense = GRB.MINIMIZE
-            
+        elif objective == "three":
+            m.setObjectiveN(C_max, index=0, weight=weight[0], name="minimize_makespan")
+            m.setObjectiveN(-skill_obj, index=1, weight=weight[1], name="minimize_minus_skill_levels")
+            m.setObjectiveN(cognitive_load_total_obj, index=2, weight=weight[2], name="minimize_cognitive_load_total")
+            m.modelSense = GRB.MINIMIZE
+
+        else:
+            raise ValueError("objective doit être 'makespan', 'skill', 'three', 'lexicographic' ou 'cognitive_load_tutors'")
+        
 
 
         # sum_Ci_obj = gp.quicksum(C[i] for i in range(self.instance.nb_jobs))
@@ -534,11 +742,7 @@ class Model:
         m.write(f"../results/model_{objective}.lp")
         return m
 
-
-
-
-
-    def solve(self, objective="makespan", weight=[0,0], priority=[0,1], verbose=False):
+    def solve(self, objective="makespan", weight=[0,0], priority=[0,1], time_limit=None, verbose=False):
         """
         Résout le modèle et affiche les résultats
         
@@ -546,19 +750,18 @@ class Model:
             objective (str): l'objectif à optimiser, peut être "makespan", "skill", "both" ou "lexicographic"
             weight (list): les poids à accorder à chaque objectifs (makespan, skill) si objective = "both", n'est pas utilisé sinon
             priority (list): la priorité à accorder à chaque objectif (makespan, skill) si objective = "lexicographic", n'est pas utilisé sinon
+            time_limit (int): la limite de temps pour l'optimisation
             verbose (bool): si True, affiche les informations sur les solutions trouvées par Gurobi
             
         Returns:
             (Solution): une instance de la classe Solution contenant les résultats de la résolution du modèle
         """
 
-        assert objective in ["makespan", "skill", "both", "lexicographic"], "objective doit être 'makespan', 'skill', 'both' ou 'lexicographic'"
-        assert len(weight) == 2, "weight doit être une liste de deux éléments"
-        if objective == "both":
-            assert sum(weight) == 1, "la somme des poids doit être égale à 1"
-        assert len(priority) == 2, "priority doit être une liste de deux éléments"
-    
-        m = self._build_model(objective, weight, priority)
+        assert objective in ["makespan", "skill", "three", "lexicographic", "cognitive_load_tutors"], "objective doit être 'makespan', 'skill', 'three', 'lexicographic' ou 'cognitive_load_tutors'"
+        assert len(weight) == 3, "weight doit être une liste de trois éléments"
+        assert len(priority) == 3, "priority doit être une liste de trois éléments"
+
+        m = self._build_model(objective, weight, priority, time_limit)
 
         if verbose == False:
             m.setParam('OutputFlag', 0) # to disable gurobi output
@@ -567,18 +770,31 @@ class Model:
         if m.status == GRB.OPTIMAL:
             print("Optimal solution found with objective value:", m.objVal)
             m.write("../results/solution.sol")
+            self.write_objectives_values(m, m.NumObj, "../results/objectives_values.txt")
+
+            
         else:
             print("No optimal solution found. Status code:", m.status)
             return
 
-
+        res = [] # liste de tuples (nom_variable, valeur_variable) pour les variables du modèle dans la solution optimale
+        
+        # Query number of multiple objectives, and number of solutions
+        nSolutions = m.SolCount
+        nObjectives = m.NumObj
+        print("nObjectives", nObjectives)
+        print("nSolutions", nSolutions)
+        if nObjectives > 1:
+            for o in range(nObjectives): # On récupère la valeur de chaque objectif pour la solution optimale
+                m.params.ObjNumber = o
+                # print("m.ObjNVal", m.ObjNVal)
+                res.append(('Obj'+str(o), m.ObjNVal))
+        
         if verbose:
-            # Query number of multiple objectives, and number of solutions
-            nSolutions = m.SolCount
-            nObjectives = m.NumObj
             print("Problem has", nObjectives, "objectives")
             print("Gurobi found ", nSolutions, "solutions")
-
+            print("***********************")
+            
             if nObjectives > 1:
                 solutions = []
                 for s in range(nSolutions):
@@ -611,18 +827,18 @@ class Model:
         # print("len(all_vars)", len(all_vars))
         values = m.getAttr('X', all_vars)
         names = m.getAttr('VarName', all_vars)
-        res = []
-        for name, value in zip(names, values):
+        for name, value in zip(names, values): # variables du modèle avec leur valeur dans la solution optimale
             res.append((name, value))
+
         
         if verbose :
             print("objective value:", m.objVal)
-            # print(res)
+            print(res)
         return Solution(res, self.instance)    
 
-    
 class Solution:
     def __init__(self, var_list, instance):
+        # Les matrices suivantes possèdent beaucoup de zéros car elles sont de la taille maximale.
         self.x = np.zeros((instance.nb_jobs, instance.max_nb_operations, instance.max_nb_sub_operations, instance.nb_workers)) # x[i, j, s, k] = 1 if sub operation s of  operation j of job i is assigned to worker k, 0 otherwise
         self.d = np.zeros((instance.nb_jobs, instance.max_nb_operations, instance.max_nb_sub_operations, instance.nb_workers))
         self.C = np.zeros(instance.nb_jobs)
@@ -631,7 +847,16 @@ class Solution:
         self.l = np.zeros((instance.nb_workers, instance.nb_professions))
         self.f = np.zeros((instance.nb_jobs, instance.max_nb_operations, instance.max_nb_sub_operations, instance.nb_workers))
         self.z_auxilary = np.zeros((instance.nb_jobs, instance.max_nb_operations, instance.max_nb_sub_operations, 3)) # z_auxilary[i,j,s,z] = 1 if sub-op s of operation j of job i is done en solo (z=0) ou en apprentissage (z=1) ou en collab (z=2)
-
+        
+        # ergonomic variables
+        self.is_tutor = np.zeros((instance.nb_jobs, instance.max_nb_operations, instance.max_nb_sub_operations, instance.nb_workers)) # is_tutor[i,j,s,k] = 1 if worker k is tutor for sub-op s of operation j of job i, 0 otherwise
+        self.cognitive_load_tutors = np.zeros((instance.nb_workers, instance.nb_professions)) # cognitive_load_tutors[k, m] = charge cognitive pour le worker k liée à l'apprentissage  en tant que tuteur pour le métier m
+        self.cognitive_load_apprentis = np.zeros((instance.nb_workers, instance.nb_professions)) # cognitive_load_apprentis[k, m] = charge cognitive pour le worker k liée à l'apprentissage  en tant que apprenti pour le métier m
+        self.cognitive_load_collaboration = np.zeros((instance.nb_workers, instance.nb_professions)) # cognitive_load_collaboration[k, m] = charge cognitive pour le worker k liée à la collaboration pour le métier m
+        self.cognitive_load_total = np.zeros((instance.nb_workers, instance.nb_professions)) # cognitive_load_total[k, m] = charge cognitive totale pour le worker k pour le métier m
+        
+        # objective values
+        self.objective_values = {}
 
         # print("var_list", var_list)
         for v in var_list:
@@ -674,6 +899,41 @@ class Solution:
                 indices = v[0][11:-1].split(",")
                 i, j, s, z = int(indices[0]), int(indices[1]), int(indices[2]), int(indices[3])
                 self.z_auxilary[i, j, s, z] = v[1]
+
+            elif v[0][:8] == "is_tutor": # is_tutor[i, j, s, k] -> indices = [i, j, s, k]
+                indices = v[0][9:-1].split(",")
+                i, j, s, k = int(indices[0]), int(indices[1]), int(indices[2]), int(indices[3])
+                # print(f"is_tutor[{i}, {j}, {s}, {k}] = {v[1]}")
+                self.is_tutor[i, j, s, k] = v[1]
+
+            elif v[0][:21] == "cognitive_load_tutors" :
+                indices = v[0][22:-1].split(",")
+                k, metier = int(indices[0]), int(indices[1])
+                # print(f"cognitive_load_tutors[{k}, {metier}] = {v[1]}")
+                self.cognitive_load_tutors[k, metier] = v[1]
+            
+            elif v[0][:28] == "cognitive_load_collaboration" :
+                indices = v[0][29:-1].split(",")
+                k, metier = int(indices[0]), int(indices[1])
+                # print(f"cognitive_load_collaboration[{k}, {metier}] = {v[1]}")
+                self.cognitive_load_collaboration[k, metier] = v[1]
+
+            elif v[0][:24] == "cognitive_load_apprentis" :
+                indices = v[0][25:-1].split(",")
+                k, metier = int(indices[0]), int(indices[1])
+                # print(f"cognitive_load_apprentis[{k}, {metier}] = {v[1]}")
+                self.cognitive_load_apprentis[k, metier] = v[1]
+
+            elif v[0][:20] == "cognitive_load_total" :
+                indices = v[0][21:-1].split(",")
+                k, metier = int(indices[0]), int(indices[1])
+                # print(f"cognitive_load_total[{k}, {metier}] = {v[1]}")
+                self.cognitive_load_total[k, metier] = v[1]
+
+            elif v[0][:3] == "Obj":
+                index_obj = int(v[0][3:])
+                self.objective_values[index_obj] = v[1]
+
             
 
     def __str__(self):
@@ -687,15 +947,23 @@ class Solution:
 
 
 if __name__ == "__main__":
-    # nb_jobs, max_nb_operations, nb_sub_operations,  max_nb_sub_operations, sub_operations_times, sub_operations_difficulties, nb_workers, levels_workers, difficulty_jobs, jobs_struct, constraints_precedence_operations, constraints_precedence_sub_operations = read_file("../data/data_temp.test")
-    res = read_file("../data/data_temp.test")
-    # instance = Instance(nb_jobs, max_nb_operations, nb_sub_operations, max_nb_sub_operations, sub_operations_times, sub_operations_difficulties, nb_workers, levels_workers, difficulty_jobs, jobs_struct, constraints_precedence_operations, constraints_precedence_sub_operations)
+    
+    # res = read_file("../data/data_temp.test")
+    res = read_file("../data/data_real_time.test")
+    
     instance = Instance(res)
 
     print(instance)
     model = Model(instance)
-    s = model.solve(objective="both", weight=[0.5, 0.5], priority=[0, 1], verbose=True)
+    
+    # s = model.solve(objective="lexicographic", weight=[0.5, 0.5, 0.5], priority=[2, 1, 0], verbose=True)
+    s = model.solve(objective="makespan", weight=[0.5, 0.5, 0.5], priority=[2, 1, 0], verbose=True)
+    
     print(s)
 
     gantt_chart(s, instance, color=0)
-    plot_levels_workers(s, instance, verbose=True)
+    # plot_levels_workers(s, instance, verbose=True)
+
+
+
+

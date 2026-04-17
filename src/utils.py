@@ -3,6 +3,7 @@ import plotly.figure_factory as ff
 import pandas as pd
 import hashlib # for generating colors for the Gantt chart based on sub-operation index
 import networkx as nx
+import matplotlib.pyplot as plt
 
 def read_file(file_path):
     file = open(file_path, "r")
@@ -191,10 +192,139 @@ def read_file(file_path):
     
     # res : nb_jobs, nb_professions, nb_sub_operations_profession, nb_sub_operations, sub_operations_difficulties, sub_operations_times, max_nb_operations, max_nb_sub_operations, nb_workers, levels_workers, difficulty_jobs, jobs_struct, constraints_precedence_operations, constraints_precedence_sub_operations
     return res # dict with all the data of the instance
+
+def read_solution_file(filename):
+    """
+    Lit un ficheir sol de Gurobi et retourne une liste de tuples pour la classe Solution.
+    """
+
+    res = []
+    found_e = False
+
+    f = open(filename, 'r')
+    for line in f:
+        if line[0] != "#": 
+            line = line.strip().split(" ") 
+            name = line[0]
+            value = line[1]
+            for i in range(len(value)):
+                if value[i] == "e":
+                    value = float(value[:i]) * (10 ** int(value[i+1:]))
+                    found_e = True
+                    break
+            if not found_e:
+                value = float(value)
+            res.append((name, value))
+    f.close()
+    return res
+
+def plot_cognitive_load_tutors(solution, instance, verbose=False):
+    """
+    Affiche la charge cognitive liée à l'apprentissage pour les tuteurs pour chaque métier après chaque run du PL
     
+    Args:
+    solution (Solution) : Une solution de l'instance 
+    instance (Instance) : Une instance du problème
 
+    Returns:
+        None : Affiche le graphique
+    """
 
-import matplotlib.pyplot as plt
+    if verbose:
+        print("cognitive_load_tutors=")
+        print(solution.cognitive_load_tutors) # size (nb_workers, nb_professions)
+
+    for k in range(instance.nb_workers):
+        plt.plot(solution.cognitive_load_tutors[k, :], marker='o', label=f'w{k+1}')
+    
+    plt.title('Cognitive load related to learning for tutors for each profession')
+    plt.xlabel('Profession Index')
+    plt.ylabel('Cognitive Load')
+    plt.xticks(range(instance.nb_professions))
+    plt.legend()
+    plt.grid()
+    plt.show()
+
+def plot_cognitive_load_collaboration(solution, instance, verbose=False):
+    """
+    Affiche la charge cognitive liée à la collaboration pour les travailleurs pour chaque métier après chaque run du PL
+    
+    Args:
+    solution (Solution) : Une solution de l'instance 
+    instance (Instance) : Une instance du problème
+
+    Returns:
+        None : Affiche le graphique
+    """
+
+    if verbose:
+        print("cognitive_load_collaboration=")
+        print(solution.cognitive_load_collaboration) # size (nb_workers, nb_professions)
+
+    for k in range(instance.nb_workers):
+        plt.plot(solution.cognitive_load_collaboration[k, :], marker='o', label=f'w{k+1}')
+    
+    plt.title('Cognitive load related to collaboration for each profession')
+    plt.xlabel('Profession Index')
+    plt.ylabel('Cognitive Load')
+    plt.xticks(range(instance.nb_professions))
+    plt.legend()
+    plt.grid()
+    plt.show()
+
+def plot_cognitive_load_apprentis(solution, instance, verbose=False):
+    """
+    Affiche la charge cognitive liée à l'apprentissage pour les apprentis pour chaque métier après chaque run du PL
+    
+    Args:
+    solution (Solution) : Une solution de l'instance 
+    instance (Instance) : Une instance du problème
+
+    Returns:
+        None : Affiche le graphique
+    """
+
+    if verbose:
+        print("cognitive_load_apprentis=")
+        print(solution.cognitive_load_apprentis) # size (nb_workers, nb_professions)
+
+    for k in range(instance.nb_workers):
+        plt.plot(solution.cognitive_load_apprentis[k, :], marker='o', label=f'w{k+1}')
+    
+    plt.title('Cognitive load related to learning for apprentices for each profession')
+    plt.xlabel('Profession Index')
+    plt.ylabel('Cognitive Load')
+    plt.xticks(range(instance.nb_professions))
+    plt.legend()
+    plt.grid()
+    plt.show()
+
+def plot_cognitive_load_total(solution, instance, verbose=False):
+    """
+    Affiche la charge cognitive totale pour les travailleurs pour chaque métier après chaque run du PL
+    
+    Args:
+    solution (Solution) : Une solution de l'instance 
+    instance (Instance) : Une instance du problème
+
+    Returns:
+        None : Affiche le graphique
+    """
+
+    if verbose:
+        print("cognitive_load_total=")
+        print(solution.cognitive_load_total) # size (nb_workers, nb_professions)
+
+    for k in range(instance.nb_workers):
+        plt.plot(solution.cognitive_load_total[k, :], marker='o', label=f'w{k+1}')
+    
+    plt.title('Total cognitive load for each profession')
+    plt.xlabel('Profession Index')
+    plt.ylabel('Cognitive Load')
+    plt.xticks(range(instance.nb_professions))
+    plt.legend()
+    plt.grid()
+    plt.show()
 
 def plot_levels_workers(solution, instance, verbose=False):
     """
@@ -216,7 +346,7 @@ def plot_levels_workers(solution, instance, verbose=False):
     
     if verbose :
         print("levels_workers=")
-        print(levels_workers)
+        print(levels_workers) # size (nb_workers, 2, nb_professions) : levels_workers[k, 0, m] = initial level of worker k for profession m, levels_workers[k, 1, m] = final level of worker k for profession m after run of the PL
         
     if instance.nb_workers == 1:
         plt.plot(levels_workers[0, 0, :], marker='o', label='Initial levels')
@@ -231,8 +361,8 @@ def plot_levels_workers(solution, instance, verbose=False):
     else :
         fig, axs = plt.subplots(instance.nb_workers)
         for k in range(instance.nb_workers):
-            axs[k].plot(levels_workers[k, 0, :], marker='o', label=f'Worker {k+1} initial level')
-            axs[k].plot(levels_workers[k, 1, :], marker='s', label=f'Worker {k+1} final level')
+            axs[k].plot(levels_workers[k, 0, :], marker='o', label=f'w{k+1} initial level')
+            axs[k].plot(levels_workers[k, 1, :], marker='s', label=f'w{k+1} final level')
             axs[k].set_title(f'Levels of Worker {k+1} for each profession')
             axs[k].set_xlabel('Profession Index')
             axs[k].set_ylabel('Level of Worker')
@@ -243,7 +373,7 @@ def plot_levels_workers(solution, instance, verbose=False):
         plt.show()
     
 
-
+# Mettre au propre la fonction suivante pour ne pas avoir des constantes en durs et pour éviter redondances
 def gantt_chart(solution, instance, color=0, render="html", save_path=None, verbose=False):
     """ 
     Affiche le diagramme de Gantt pour une solution donnée et une instance du problème.
@@ -275,13 +405,22 @@ def gantt_chart(solution, instance, color=0, render="html", save_path=None, verb
                     if solution.x[i, j, s, k] == 1:
                         start_time = solution.d[i, j, s, k]
                         sub_op = (i, j, s) # sub operation s of operation j of job i
-                        sub_op_index = instance.jobs_struct[i][j][s]
+
+                        elementary_task = int(instance.jobs_struct[i][j][s])
                         processing_time = solution.f[i, j, s, k] - start_time
+                        metier = int(instance.sub_op_to_m[elementary_task])
+                        level_worker = instance.levels_workers[k][metier]
+                        difficulty_task = instance.sub_operations_difficulties[elementary_task]
                         for z in range(3):
                             if solution.z_auxilary[i, j, s, z] == 1:
                                 mode = dico_mode_to_str[z]
+                                if mode == "learning":
+                                    if solution.is_tutor[i, j, s, k] == 1:
+                                        mode += " (tutor)"
+                                    else:
+                                        mode += " (apprentice)"
                         # processing_time = instance.sub_operations_times[sub_op_index][0] # [0] pour le momnent à modif si 2 workers
-                        y[k].append((start_time, sub_op, processing_time, mode))
+                        y[k].append((start_time, sub_op, processing_time, elementary_task, metier, mode, level_worker, difficulty_task))
 
 
     
@@ -293,8 +432,9 @@ def gantt_chart(solution, instance, color=0, render="html", save_path=None, verb
     for k in range(instance.nb_workers):
         y[k].sort()
         if verbose:
-            print(f"Worker w{k+1} sorted tasks: ", y[k] ," : (start_time, operation, processing_time)")
+            print(f"Worker w{k+1} sorted tasks: ", y[k] ," : (start_time, operation, processing_time, metier, elementary_task, mode, level_worker, difficulty_task)")
 
+    print(y[1])
     ########################################################################
     ########################################################################
     ##
@@ -314,18 +454,22 @@ def gantt_chart(solution, instance, color=0, render="html", save_path=None, verb
 
 
     ##### plotting the Gantt chart
-    df = pd.DataFrame(columns=["Task", "Start", "Finish", "Sub_operation" ,"Operation", "Job", "mode"])
+    df = pd.DataFrame(columns=["Task", "Start", "Finish", "Sub_operation" ,"Operation", "Job", "mode", "Level_worker", "Difficulty_task"])
     for k in range(instance.nb_workers): # for each worker k
         for task in y[k]: # for each task of worker k
-            start_time, (i, j, s), processing_time, mode = task
+            start_time, (i, j, s), processing_time, elementary_task, metier, mode, level_worker, difficulty_task = task
             finish_time = start_time + processing_time
             df_tmp = pd.DataFrame({"Task": [f"w{k+1}"],
-                                   "Start": [start_time + 1e-1],
+                                   "Start": [start_time],# + 1e-10000],
                                    "Finish": [finish_time],
+                                   "Elementary task": [elementary_task],
+                                   "Metier": [metier],
                                    "Sub_operation": [f"({i+1},{j+1},{s+1})"],
                                    "Operation": ["(" + str(i+1) + "," + str(j+1) + ")"],
                                    "Job": ["J"+str(i+1)],
-                                   "mode": [mode]
+                                   "mode": [mode],
+                                   "Level_worker": [level_worker],
+                                   "Difficulty_task": [difficulty_task]
                                    })
             df = pd.concat([df, df_tmp], ignore_index=True) # ignore_index=True for following the index of df only, not df_tmp
     if verbose:
@@ -444,3 +588,4 @@ if __name__ == "__main__":
         print(f"{key} = ")
         print(data[key])
         print("--------------------------------------")
+
