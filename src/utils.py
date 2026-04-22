@@ -1,5 +1,6 @@
 import numpy as np
 import plotly.figure_factory as ff
+import plotly.colors as pc
 import pandas as pd
 import hashlib # for generating colors for the Gantt chart based on sub-operation index
 import networkx as nx
@@ -16,35 +17,37 @@ def read_file(file_path):
         if line.strip() == "<number of jobs>":
             nb_jobs = int(file.readline().strip())
             res["nb_jobs"] = nb_jobs
+            # print("nb_jobs=", nb_jobs)
 
 
         elif line.strip() == "<number of professions>":
             nb_professions = int(file.readline().strip())
             res["nb_professions"] = nb_professions
+            # print("nb_professions=", nb_professions)
 
 
         elif line.strip() == "<professions detailed>":
             line = file.readline().strip().split(" ")
             assert nb_professions == len(line), "Le nombre de corps de métier doit être égale à la taille du vecteur professions detailed"
-            nb_sub_operations_profession = np.zeros(nb_professions)
+            nb_task_in_profession = np.zeros(nb_professions)
 
             for s in range(nb_professions):
-                nb_sub_operations_profession[s] = int(line[s])
-            res["nb_sub_operations_profession"] = nb_sub_operations_profession
-            # print("nb_sub_operations_profession=", nb_sub_operations_profession)
-            nb_sub_operations = int(np.sum(nb_sub_operations_profession))
-            res["nb_sub_operations"] = nb_sub_operations
-            # print("nb_sub_operations=", nb_sub_operations)
+                nb_task_in_profession[s] = int(line[s])
+            res["nb_task_in_profession"] = nb_task_in_profession
+            # print("nb_task_in_profession=", nb_task_in_profession)
+            
+            nb_tasks = int(np.sum(nb_task_in_profession))
+            res["nb_tasks"] = nb_tasks # peut être déduit de nb_task_in_profession
+            res["nb_professions"] = nb_professions # peut etre déduit de nb_task_in_profession
+            # print("nb_tasks=", nb_tasks)
 
 
-        elif line.strip() == "<sub_op(difficulty and times)>":
+        elif line.strip() == "<tasks(difficulty and times)>":
             # print("here !!!!!!!!!!!!!!!")
-            dict_sub_op_to_m = dict() 
-            sub_operations_difficulties = []
-            sub_operations_times = np.zeros((nb_sub_operations, 3)) # 3 columns for doing alone, with learning or collaboratively
-            index_sub_op = 0
-
-
+            dict_task_to_m = dict()
+            tasks_difficulties = []
+            tasks_times = np.zeros((nb_tasks, 3)) # 3 columns for doing alone, with learning or collaboratively
+            index_task = 0
 
             # print("AVANT WHILE line =", line)
             while line != '': # fin de lecture de la section
@@ -55,58 +58,60 @@ def read_file(file_path):
                 if line[0] != "m": # read the profession index 
                     # print("line[0]=", line[0])
                     line = line.split(" ")
-                    sub_operations_difficulties.append(int(line[0])) # difficulty of sub-operation s
-                    sub_operations_times[index_sub_op][0] = float(line[1]) # processing time of sub-operation s if done alone
-                    sub_operations_times[index_sub_op][1] = float(line[2]) # processing time of sub-operation s if done with learning effect
-                    sub_operations_times[index_sub_op][2] = float(line[3]) # processing time of sub-operation s if done collaboratively
-                    dict_sub_op_to_m[index_sub_op] = m
+                    tasks_difficulties.append(int(line[0])) # difficulty of task s
+                    tasks_times[index_task][0] = float(line[1]) # processing time of task s if done alone
+                    tasks_times[index_task][1] = float(line[2]) # processing time of task s if done with learning effect
+                    tasks_times[index_task][2] = float(line[3]) # processing time of task s if done collaboratively
+                    dict_task_to_m[index_task] = m
                     # print("lineFIN =", line)
-                    index_sub_op += 1
+                    index_task += 1
                 if line[0] == "m":
                     m = int(line.split("m")[1]) -1
-            res["sub_operations_difficulties"] = np.array(sub_operations_difficulties)
-            res["sub_operations_times"] = sub_operations_times
+            res["tasks_difficulties"] = np.array(tasks_difficulties)
+            res["tasks_times"] = tasks_times
 
             # print("--------------------------------")
-            # print("sub_operations_difficulties=")
-            # print(sub_operations_difficulties)
+            # print("tasks_difficulties=")
+            # print(tasks_difficulties)
             # print("--------------------------------")
-            # print("sub_operations_times=")
-            # print(sub_operations_times)
+            # print("tasks_times=")
+            # print(tasks_times)
             # print("--------------------------------")
 
-            # print("dict_sub_op_to_m=", dict_sub_op_to_m)
-            res["dict_sub_op_to_m"] = dict_sub_op_to_m
-
+            # print("dict_task_to_m=", dict_task_to_m)
+            res["dict_task_to_m"] = dict_task_to_m
 
 
         elif line.strip() == "<maximal number of operations>":
             max_nb_operations = int(file.readline().strip())
-            res["max_nb_operations"] = max_nb_operations
-
-        
-        elif line.strip() == "<maximal number of sub-operations per operation>":
-            max_nb_sub_operations = int(file.readline().strip())
-            res["max_nb_sub_operations"] = max_nb_sub_operations
+            res["max_nb_operations"] = max_nb_operations # max opération par jobs
             constraints_precedence_operations = np.zeros((nb_jobs, max_nb_operations, max_nb_operations)) # consideration que le nombre d'operations par job est de même ordre de grandeur pour faire matrice d'adjacence des contraintes de precedences
-            constraints_precedence_sub_operations = np.zeros((nb_jobs, max_nb_operations, max_nb_sub_operations, max_nb_sub_operations))
-
-
 
 
         elif line.strip() == "<number of workers>":
             nb_workers = int(file.readline().strip())
             res["nb_workers"] = nb_workers
         
+
         elif line.strip() == "<levels workers>":
             levels_workers = np.zeros((nb_workers, nb_professions))
             for i in range(nb_workers):
                 line = file.readline().strip().split(" ")
                 for j in range(nb_professions):
-                    levels_workers[i][j] = int(line[j])
+                    levels_workers[i][j] = float(line[j])
 
             res["levels_workers"] = levels_workers
             # print("levels_workers=", levels_workers) 
+        
+        elif line.strip() == "<forgetting workers>":
+            forgetting_workers = np.zeros((nb_workers, nb_professions))
+            for i in range(nb_workers):
+                line = file.readline().strip().split(" ")
+                for j in range(nb_professions):
+                    forgetting_workers[i][j] = float(line[j])
+
+            res["forgetting_workers"] = forgetting_workers
+            # print("forgetting_workers=", forgetting_workers)
 
 
         elif line.strip() == "<difficulty of jobs>":
@@ -119,7 +124,7 @@ def read_file(file_path):
 
         
         elif line.strip() == "<jobs>":
-            jobs_struct = [ [] for _ in range(nb_jobs) ]
+            jobs_struct = [] # jobs_struct[i] = [operation1, operation2, ...]
             job_index = 0
             
             while job_index <= nb_jobs :
@@ -129,30 +134,21 @@ def read_file(file_path):
                     break
                 if line[0] == "J":
                     job_index += 1
-                    operation_index = 0
                 else:
                     operation = line.split(" ") # 1 4 5
-                    jobs_struct[job_index-1].append([]) # pour ajouter les sous opérations de l'opération courante à la structure du job courant
-                    for sub_op in range(len(operation)):
-                        jobs_struct[job_index-1][operation_index].append(int(operation[sub_op])-1)
-                    operation_index += 1
+                    jobs_struct.append([]) # pour ajouter l'opération courante à la structure du job courant
+                    for i in range(len(operation)):
+                        jobs_struct[-1].append(int(operation[i])-1) # on stocke l'index de la la tache dans la structure du job courant
+ 
             res["jobs_struct"] = jobs_struct
+            # print("jobs_struct=", jobs_struct)
 
-            # print("jobs_struct=")
-            # for i in range(len(jobs_struct)):
-            #     print(f"Job {i+1} : ")
-            #     for j in range(len(jobs_struct[i])):
-            #         print(f"O {j+1} : ", end="")
-            #         for s in range(len(jobs_struct[i][j])):
-            #             print(f"{jobs_struct[i][j][s]} ", end="")
-            #         print()
 
         elif line.strip() == "<precedence constraints of operations>":
 
             line = file.readline().strip()
             while line != "": # fin de lecture de la section
                 # print("line=", line)
-                
                 
                 if line[0] == "J": # contrainte de précédence entre opérations d'un même jobs
                     # print("ici")
@@ -165,26 +161,9 @@ def read_file(file_path):
                         constraints_precedence_operations[job_index-1][int(prec_constr[0])-1][int(prec_constr[1])-1] = 1
                         line = file.readline().strip()
 
-
-                if line[0] == "<": # contrainte de précédence entre sous opérations d'une operation
-                    # print("la")
-                    operation_index = int(line.split("<")[1].split(">")[0]) # permet de savoir quelle opération est considéré
-                    # print("job_index=", job_index, "operation_index=", operation_index)
-                    line = file.readline().strip()
-                    while line != "" and line[0] != "J" and line[0] != "<": # tant que contrainte de sous operation
-                        prec_constr_sub_op = line.split(",")
-                        # print("prec_constr_sub_op=", prec_constr_sub_op)
-                        constraints_precedence_sub_operations[job_index-1][operation_index-1][int(prec_constr_sub_op[0])-1][int(prec_constr_sub_op[1])-1] = 1
-                        line = file.readline().strip()
-            
             res["constraints_precedence_operations"] = constraints_precedence_operations
-            res["constraints_precedence_sub_operations"] = constraints_precedence_sub_operations
-
             # print("constraints_precedence_operations=", constraints_precedence_operations.shape)
             # print(constraints_precedence_operations)
-            # print("-------------------------------")
-            # print("constraints_precedence_sub_operations=", constraints_precedence_sub_operations.shape)
-            # print(constraints_precedence_sub_operations)
             # print("END")        
     
 
@@ -326,6 +305,32 @@ def plot_cognitive_load_total(solution, instance, verbose=False):
     plt.grid()
     plt.show()
 
+def bars_cognitive_load_total(solution, instance, verbose=False):
+    """
+    Affiche la charge cognitive totale pour chaque travailleurs sous forme de bars
+    
+    Args:
+    solution (Solution) : Une solution de l'instance 
+    instance (Instance) : Une instance du problème
+
+    Returns:
+        None : Affiche le graphique
+    """
+
+    res = np.sum(solution.cognitive_load_total, axis=1) # charge cognitive totale pour chaque travailleur k
+
+    if verbose:
+        print("cognitive_load_total_per_worker=")
+        print(res) # size (nb_workers,)
+
+    
+    plt.bar([f'w{k+1}' for k in range(instance.nb_workers)], res)
+    plt.title('Total cognitive load for each worker')
+    plt.xlabel('Worker')
+    plt.ylabel('Total Cognitive Load')
+    plt.grid()
+    plt.show()
+
 def plot_levels_workers(solution, instance, verbose=False):
     """
     Affiche les niveaux de compétences des travailleurs pour chaque sous-opération apres chaque run du PL
@@ -359,22 +364,110 @@ def plot_levels_workers(solution, instance, verbose=False):
         plt.grid()
         plt.show()
     else :
-        fig, axs = plt.subplots(instance.nb_workers)
         for k in range(instance.nb_workers):
-            axs[k].plot(levels_workers[k, 0, :], marker='o', label=f'w{k+1} initial level')
-            axs[k].plot(levels_workers[k, 1, :], marker='s', label=f'w{k+1} final level')
-            axs[k].set_title(f'Levels of Worker {k+1} for each profession')
-            axs[k].set_xlabel('Profession Index')
-            axs[k].set_ylabel('Level of Worker')
-            axs[k].set_xticks(range(instance.nb_professions))
-            axs[k].legend()
-            axs[k].grid()
-        plt.tight_layout()
-        plt.show()
+            plt.plot(levels_workers[k, 0, :], marker='o', label=f'w{k+1} initial level')
+            plt.plot(levels_workers[k, 1, :], marker='s', label=f'w{k+1} final level')
+            plt.title(f'Levels of Worker {k+1} for each profession')
+            plt.xlabel('Profession Index')
+            plt.ylabel('Level of Worker')
+            plt.xticks(range(instance.nb_professions))
+            plt.legend()
+            plt.grid()
+            plt.show()
+        # fig, axs = plt.subplots(instance.nb_workers)
+        # for k in range(instance.nb_workers):
+        #     axs[k].plot(levels_workers[k, 0, :], marker='o', label=f'w{k+1} initial level')
+        #     axs[k].plot(levels_workers[k, 1, :], marker='s', label=f'w{k+1} final level')
+        #     axs[k].set_title(f'Levels of Worker {k+1} for each profession')
+        #     axs[k].set_xlabel('Profession Index')
+        #     axs[k].set_ylabel('Level of Worker')
+        #     axs[k].set_xticks(range(instance.nb_professions))
+        #     axs[k].legend()
+        #     axs[k].grid()
+        # plt.tight_layout()
+        # plt.show()
     
 
+# Source - https://stackoverflow.com/a/47872260
+# Posted by ImportanceOfBeingErnest, modified by community. See post 'Timeline' for change history
+# Retrieved 2026-04-21, License - CC BY-SA 4.0
+
+from  matplotlib.colors import LinearSegmentedColormap
+
+
+def resume_levels_workers(solution, instance, verbose=False):
+
+    cmap=LinearSegmentedColormap.from_list('rg',["r", "w", "g"], N=256) 
+    cmap = plt.cm.RdYlGn
+
+    res_tot = solution.l - instance.levels_workers # gain de niveau de chaque worker pour chaque profession
+    res_worker = np.sum(res_tot, axis=1) # gain de niveau total de chaque worker pour tous les métiers
+    res_profession = np.sum(res_tot, axis=0) # gain de niveau total pour chaque profession pour tous les workers
+    if verbose:
+        print("Gains de niveaux de chaque travailleur pour chaque profession :")
+        print(res_tot)
+        print("Gains de niveaux pour chaque travailleur :")
+        print(res_worker)
+        print("Gains de niveaux pour chaque profession :")
+        print(res_profession)
+
+    plt.imshow(res_tot, cmap=cmap, aspect='auto')
+
+    for k in range(instance.nb_workers):
+        for m in range(instance.nb_professions):
+            if res_tot[k, m] > 0:
+                sign = "+"
+            else:
+                sign = ""
+            plt.text(m, k, f" {sign}{res_tot[k, m]:.1f}", ha='center', va='center', color='black')
+
+    plt.xticks(range(instance.nb_professions), [f'm{m+1}' for m in range(instance.nb_professions)])
+    plt.yticks(range(instance.nb_workers), [f'w{k+1}' for k in range(instance.nb_workers)])
+    plt.colorbar(label='Gain de niveau')
+    plt.title("Gains de niveaux de chaque travailleur pour chaque profession")
+    plt.xlabel("Profession")
+    plt.ylabel("Worker")
+    plt.show()
+
+
+def resume_forgetting_effect_workers(solution, instance, verbose=False):
+
+    # on inverse signification du vert et du rouge pour le forgetting effect : rouge pour perte de niveau et vert pour pas de perte de niveau
+    cmap = LinearSegmentedColormap.from_list('rg',["g", "w", "r"], N=256)
+    cmap = plt.cm.RdYlGn_r
+
+    res_tot = solution.forgetting - instance.forgetting # perte de niveau de chaque worker pour chaque profession
+    res_worker = np.sum(res_tot, axis=1) # perte de niveau total de chaque worker pour tous les métiers
+    res_profession = np.sum(res_tot, axis=0) # perte de niveau total pour chaque profession pour tous les workers
+    if verbose:
+        print("Perte de niveaux de chaque travailleur pour chaque profession : (Forgetting Effect)")
+        print(res_tot)
+        print("Perte de niveaux pour chaque travailleur :")
+        print(res_worker)
+        print("Perte de niveaux pour chaque profession :")
+        print(res_profession)
+
+    plt.imshow(res_tot, cmap=cmap, aspect='auto')
+
+    for k in range(instance.nb_workers):
+        for m in range(instance.nb_professions):
+            if res_tot[k, m] > 0:
+                sign = "+"
+            else:
+                sign = ""
+            plt.text(m, k, f" {sign}{res_tot[k, m]:.1f}", ha='center', va='center', color='black')
+
+    plt.xticks(range(instance.nb_professions), [f'm{m+1}' for m in range(instance.nb_professions)])
+    plt.yticks(range(instance.nb_workers), [f'w{k+1}' for k in range(instance.nb_workers)])
+    plt.colorbar(label='Perte de niveau')
+    plt.title("Pertes de niveaux - Forgetting Effect")
+    plt.xlabel("Profession")
+    plt.ylabel("Worker")
+    plt.show()
+
+
 # Mettre au propre la fonction suivante pour ne pas avoir des constantes en durs et pour éviter redondances
-def gantt_chart(solution, instance, color=0, render="html", save_path=None, verbose=False):
+def gantt_chart(solution, instance, color=0, render="html", save_path=None, verbose=False, separate_little=False):
     """ 
     Affiche le diagramme de Gantt pour une solution donnée et une instance du problème.
     Par défaut la coloration est faite par sous-opération.
@@ -382,7 +475,7 @@ def gantt_chart(solution, instance, color=0, render="html", save_path=None, verb
     Args:
         solution (Solution) : Une solution de l'instance 
         instance (Instance) : Une instance du problème
-        color (int) :  0 -> coloration par sous-opération.
+        color (int) :  0 -> coloration par tache.
                        1 -> coloration par opération.
                        2 -> coloration par job.
                        3 -> coloration par mode (seul, apprentissage, collaboratif)
@@ -396,31 +489,29 @@ def gantt_chart(solution, instance, color=0, render="html", save_path=None, verb
     y = [ [] for _ in range(instance.nb_workers) ] # y[k] = [(start_time, sub_operation, processing_time), ...] for each worker k
 
 
-    dico_mode_to_str = {0: "alone", 1: "learning", 2: "collaboratively"}
+    dico_mode_to_str = {0: "alone", 1: "learning", 2: "collaboratively", 3: "alone without levels"} 
     ##### filling the list of tasks for each worker with their start time and processing time
     for i in range(instance.nb_jobs):
         for j in range(len(instance.jobs_struct[i])):
-            for s in range(len(instance.jobs_struct[i][j])):
-                for k in range(instance.nb_workers):
-                    if solution.x[i, j, s, k] == 1:
-                        start_time = solution.d[i, j, s, k]
-                        sub_op = (i, j, s) # sub operation s of operation j of job i
-
-                        elementary_task = int(instance.jobs_struct[i][j][s])
-                        processing_time = solution.f[i, j, s, k] - start_time
-                        metier = int(instance.sub_op_to_m[elementary_task])
-                        level_worker = instance.levels_workers[k][metier]
-                        difficulty_task = instance.sub_operations_difficulties[elementary_task]
-                        for z in range(3):
-                            if solution.z_auxilary[i, j, s, z] == 1:
-                                mode = dico_mode_to_str[z]
-                                if mode == "learning":
-                                    if solution.is_tutor[i, j, s, k] == 1:
-                                        mode += " (tutor)"
-                                    else:
-                                        mode += " (apprentice)"
-                        # processing_time = instance.sub_operations_times[sub_op_index][0] # [0] pour le momnent à modif si 2 workers
-                        y[k].append((start_time, sub_op, processing_time, elementary_task, metier, mode, level_worker, difficulty_task))
+            for k in range(instance.nb_workers):
+                if solution.x[i, j, k] == 1:
+                    start_time = solution.d[i, j, k]
+                    op = (i, j)
+                    elementary_task = int(instance.jobs_struct[i][j]) # tache élémentaire qui constitue l'opération j du job i
+                    processing_time = solution.f[i, j, k] - start_time
+                    metier = int(instance.task_to_m[elementary_task])
+                    level_worker = instance.levels_workers[k][metier]
+                    difficulty_task = instance.tasks_difficulties[elementary_task]
+                    for z in range(4): # 4 modes : seul, apprentissage, collaboratif, seul sans levels
+                        if solution.z_auxilary[i, j, z] == 1:
+                            mode = dico_mode_to_str[z]
+                            if mode == "learning":
+                                if solution.is_tutor[i, j, k] == 1:
+                                    mode += " (tutor)"
+                                else:
+                                    mode += " (apprentice)"
+                    # processing_time = instance.sub_operations_times[sub_op_index][0] # [0] pour le momnent à modif si 2 workers
+                    y[k].append((start_time, op, processing_time, elementary_task, metier, mode, level_worker, difficulty_task))
 
 
     
@@ -434,10 +525,10 @@ def gantt_chart(solution, instance, color=0, render="html", save_path=None, verb
         if verbose:
             print(f"Worker w{k+1} sorted tasks: ", y[k] ," : (start_time, operation, processing_time, metier, elementary_task, mode, level_worker, difficulty_task)")
 
-    print(y[1])
+    # print(y[1])
     ########################################################################
     ########################################################################
-    ##
+    ## PAS A JOURS  CECI EST ANCIENNE VERSIONS
     ## On à une matrice (nb_jobs, max_nb_operations, max_nb_sub_operations) 
     ## ex: 
     ##     J1 : so_111, so_112, so_113
@@ -453,22 +544,28 @@ def gantt_chart(solution, instance, color=0, render="html", save_path=None, verb
     ########################################################################
 
 
+    if separate_little:
+        decalage_view = 0.1
+    else:
+        decalage_view = 0
+
     ##### plotting the Gantt chart
-    df = pd.DataFrame(columns=["Task", "Start", "Finish", "Sub_operation" ,"Operation", "Job", "mode", "Level_worker", "Difficulty_task"])
+    df = pd.DataFrame(columns=["Task", "Start", "Finish", "Finish (var. f)", "Processing time", "Operation", "Job", "mode", "Level_w", "Difficulty_task"])
     for k in range(instance.nb_workers): # for each worker k
         for task in y[k]: # for each task of worker k
-            start_time, (i, j, s), processing_time, elementary_task, metier, mode, level_worker, difficulty_task = task
+            start_time, (i, j), processing_time, elementary_task, metier, mode, level_worker, difficulty_task = task
             finish_time = start_time + processing_time
             df_tmp = pd.DataFrame({"Task": [f"w{k+1}"],
-                                   "Start": [start_time],# + 1e-10000],
+                                   "Start": [start_time + decalage_view],
                                    "Finish": [finish_time],
+                                   "Finish (var. f)" : [solution.f[i, j, k]],
                                    "Elementary task": [elementary_task],
                                    "Metier": [metier],
-                                   "Sub_operation": [f"({i+1},{j+1},{s+1})"],
+                                   "Processing time": [processing_time],
                                    "Operation": ["(" + str(i+1) + "," + str(j+1) + ")"],
                                    "Job": ["J"+str(i+1)],
                                    "mode": [mode],
-                                   "Level_worker": [level_worker],
+                                   "Level_w": [level_worker],
                                    "Difficulty_task": [difficulty_task]
                                    })
             df = pd.concat([df, df_tmp], ignore_index=True) # ignore_index=True for following the index of df only, not df_tmp
@@ -479,7 +576,7 @@ def gantt_chart(solution, instance, color=0, render="html", save_path=None, verb
     
     
     if color == 0:
-        color_print = "Sub_operation"
+        color_print = "Operation"
     elif color == 1:
         color_print = "Operation"
     elif color == 2:
@@ -491,15 +588,19 @@ def gantt_chart(solution, instance, color=0, render="html", save_path=None, verb
         return
 
     if color == 0:
-        colours = []
-        for key in df["Sub_operation"].unique(): # if we want to see colors of sub-operations
-            # print("key=", key)
-            # print(type(key))
-            colours.append(f"#{hashlib.md5(str(key).encode()).hexdigest()[:6]}")
+        unique_ops = sorted(df["Operation"].unique())
 
-        fig = ff.create_gantt(df, group_tasks=True, index_col=color_print, colors=colours, show_colorbar=True, showgrid_x=True, showgrid_y=True,
+        palette = pc.qualitative.Plotly + pc.qualitative.D3 + pc.qualitative.Set3
+        color_map = {op: palette[i % len(palette)] for i, op in enumerate(unique_ops)}
+        # colours = []
+        # for key in df["Elementary task"].unique(): # if we want to see colors of tasks
+        #     # print("key=", key)
+        #     # print(type(key))
+        #     colours.append(f"#{hashlib.md5(str(key).encode()).hexdigest()[:6]}")
+
+        fig = ff.create_gantt(df, group_tasks=True, index_col=color_print, colors=color_map, show_colorbar=True, showgrid_x=True, showgrid_y=True,
                               title=f"Gantt Chart (makespan= {solution.C_max})")#, legend_title=color_print)
-        fig.update_layout(legend_title_text="Sub-Operation(i,j,s)")
+        fig.update_layout(legend_title_text="Elementary task")
 
     else :
         fig = ff.create_gantt(df, group_tasks=True, index_col=color_print, show_colorbar=True, showgrid_x=True, showgrid_y=True,
@@ -517,6 +618,9 @@ def gantt_chart(solution, instance, color=0, render="html", save_path=None, verb
     
     fig.layout.xaxis.type = "linear" # for having numeric x-axis instead of date
     if render == "notebook":
+        fig.show("png")
+
+    if render == "interactif":
         fig.show()
     elif render == "html":
         fig.write_html('../results/gantt_chart.html', auto_open=True) 
@@ -524,7 +628,6 @@ def gantt_chart(solution, instance, color=0, render="html", save_path=None, verb
         fig.write_html(save_path)
 
     return df
-
             
 def plot_precedence_graph(instance):
     """
@@ -578,7 +681,34 @@ def plot_precedence_graph_sub_operations(instance):
             plt.title(f"Graphe de précédence des sous-opérations de l'opération O{j+1} du Job J{i+1}")
             plt.show()
             
-    
+
+# pas suffisant doit avoir plus d'assertion comme le fait que la tache en collab est bien fait a deux etc..  
+def check_df(df):
+    for i in range(len(df)):
+        if df["mode"][i] == "alone" and  df["Level_w"][i] < df["Difficulty_task"][i]:
+            print("Condition 1 not satisfied for task ", i)
+            return False
+
+        if df["mode"][i] == "learning (tutor)" and df["Level_w"][i] < df["Difficulty_task"][i]:
+            print("Condition 2 not satisfied for task ", i)
+            return False
+
+        if df["mode"][i] == "learning (apprentice)" and df["Level_w"][i] > df["Difficulty_task"][i]:
+            print("Condition 3 not satisfied for task ", i)
+            return False
+
+        if df["mode"][i] == "collaboratively" and df["Level_w"][i] < df["Difficulty_task"][i]:
+            print("Condition 4 not satisfied for task ", i)
+            return False
+
+        if df["mode"][i] == "alone without levels" and df["Level_w"][i] >= df["Difficulty_task"][i]:
+            print("Condition 5 not satisfied for task ", i)
+            return False
+
+    return True
+
+
+
 if __name__ == "__main__":
     file_path = "../data/data_temp.test"
     data = read_file(file_path)

@@ -7,14 +7,14 @@
 <professions detailed>
 2 4 1
 
-# Les valeurs de -1 dans la section suivante indiquent que la sous opération ne peut être fait dans ce mode opératioire
-# exemple: -1 pour la collaboration, signifie que la sous-opération ne peut être fait en collaboration
+# Les valeurs de -1 dans la section suivante indiquent que la tache ne peut être fait dans ce mode opératioire
+# exemple: -1 pour la collaboration, signifie que la tache ne peut être fait en collaboration
 # Appartenance aux métier m_i
-# difficulté de la sous-opération, temps en solo, temps en apprentissage, temps en collaboration
-<sub_op(difficulty and times)>
+# difficulté de la tache, temps en solo, temps en apprentissage, temps en collaboration
+<tasks(difficulty and times)>
 m1
-1 3 4 2
-1 15 15 -1
+1 50 100 -1
+2 15 21 -1
 m2
 3 5 8 2
 3 4 6 2
@@ -23,35 +23,28 @@ m2
 m3
 2 10 20 2
 
-# nombre d'opération maximal par Job
+# nombre de taches maximal par Job
 <maximal number of operations>
-2
-
-# nombre de sous-opération maximal par opération
-<maximal number of sub-operations per operation>
-3
+5
 
 <number of workers>
 3
 
-# niveau de compétence des travailleurs pour chaque métier
+# niveau de compétence des travailleurs pour chaque corps de métier
 <levels workers>
-1 2 1
+2 2 1
 4 3 2
 1 2 1
 
-# structure complète d'un job
+
+# structure d'un job
 # job J_i
-# opération 1 de J_i : index des sous opérations qui constitue l'opération 1
-# opération 2 de J_i : index des sous opérations qui constitue l'opération 2
-# etc ...
+# taches de J_i : index des taches qui constitue le Job J_i
 <jobs>
 J1
-1 3 7
-3
+1 3 7 3
 J2
-4 2
-7 5 5
+4 2 7 5 5
 
 # Pas pris en compte pour le moment
 <difficulty of jobs>
@@ -63,12 +56,10 @@ J2
 <precedence constraints of operations>
 J1
 1,2
-<1>
+2,3
+3,4
+J2
 1,2
 2,3
-<2>
-J2
-2,1
-<1>
-1,2
-<2>
+3,4
+4,5
