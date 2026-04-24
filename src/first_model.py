@@ -9,7 +9,7 @@ class Instance:
         # VOIR si une maniere plus simple pour instancier l'instance
         pass
 
-    def from_dictionary(self, dictionary):
+    def from_dictionary(self, dictionary: dict) -> None :
         # INT
         self.nb_jobs = dictionary["nb_jobs"] # int
         self.nb_professions = dictionary["nb_professions"] # int
@@ -37,8 +37,7 @@ class Instance:
         # MAPPING TASK TO METIER
         self.task_to_m = dictionary["dict_task_to_m"]
 
-
-    def from_random(self, at_least_a_worker_have_competence_for_each_profession=True, seed=42):
+    def from_random(self, at_least_a_worker_have_competence_for_each_profession=True, seed=42) -> None:
         
         np.random.seed(seed)
         
@@ -111,7 +110,7 @@ class Instance:
                     worker_to_change = np.random.randint(0, self.nb_workers)
                     self.levels_workers[worker_to_change, metier] = max_difficulty_per_profession[metier]
 
-    def qualified_workers_for_task(self, verbose=False):
+    def qualified_workers_for_task(self, verbose=False) -> list[list[list[int]]]:
         # fonction pour visualisation les indices commence à 1  pour les workers
         res  = []
         for i in range(len(self.jobs_struct)):
@@ -137,9 +136,6 @@ class Instance:
                 print("\n")
                     
         return res
-
-
-
 
 
         
@@ -172,6 +168,140 @@ class Instance:
                f"Precedence constraints: shape= {self.constraints_precedence_operations.shape}\n{self.constraints_precedence_operations}\n"
                f"\n ===== End of Instance: =====\n")
         return res
+
+
+
+
+class Solution:
+    def __init__(self, var_list, instance):
+        # Les matrices suivantes possèdent beaucoup de zéros car elles sont de la taille maximale.
+        self.x = np.zeros((instance.nb_jobs, instance.max_nb_operations, instance.nb_workers)) # x[i, j, k] = 1 if operation j of job i is assigned to worker k, 0 otherwise
+        self.d = np.zeros((instance.nb_jobs, instance.max_nb_operations, instance.nb_workers))
+        self.C = np.zeros(instance.nb_jobs)
+        self.C_max = 0
+        self.delta = np.zeros((instance.nb_jobs, instance.max_nb_operations, instance.nb_jobs, instance.max_nb_operations, instance.nb_workers))
+        
+        self.l = np.zeros((instance.nb_workers, instance.nb_professions))
+        # self.forgetting = np.zeros((instance.nb_workers, instance.nb_professions))
+        
+        
+        self.f = np.zeros((instance.nb_jobs, instance.max_nb_operations, instance.nb_workers))
+        # prise en compte qua tache peut etre fait seul sans level 
+        self.z_auxilary = np.zeros((instance.nb_jobs, instance.max_nb_operations, 4)) # z_auxilary[i,j,mode] = 1 if operation j of job i is done en solo (mode=0) ou en apprentissage (mode=1) ou en collab (mode=2)
+        
+        # ergonomic variables
+        self.is_tutor = np.zeros((instance.nb_jobs, instance.max_nb_operations, instance.nb_workers)) # is_tutor[i,j,k] = 1 if worker k is tutor for operation j of job i, 0 otherwise
+        self.cognitive_load_tutors = np.zeros((instance.nb_workers, instance.nb_professions)) # cognitive_load_tutors[k, m] = charge cognitive pour le worker k liée à l'apprentissage  en tant que tuteur pour le métier m
+        self.cognitive_load_apprentis = np.zeros((instance.nb_workers, instance.nb_professions)) # cognitive_load_apprentis[k, m] = charge cognitive pour le worker k liée à l'apprentissage  en tant que apprenti pour le métier m
+        self.cognitive_load_collaboration = np.zeros((instance.nb_workers, instance.nb_professions)) # cognitive_load_collaboration[k, m] = charge cognitive pour le worker k liée à la collaboration pour le métier m
+        self.cognitive_load_total = np.zeros((instance.nb_workers, instance.nb_professions)) # cognitive_load_total[k, m] = charge cognitive totale pour le worker k pour le métier m
+        
+        # penalty for soft CONSTRAINTS :
+        self.penalty_levels = np.zeros((instance.nb_jobs, instance.max_nb_operations)) # penalty_levels[i,j] = pénalité pour l'opération j du job i si elle est faite en solo par un worker qui n'a pas le niveau requis pour la faire
+
+        # objective values
+        self.objective_values = {}
+
+        # print("var_list", var_list)
+        for v in var_list:
+
+            if v[0][0][0] == "x":
+                indices = v[0][2:-1].split(",") # x[i, j, k] -> indices = [i, j, k]
+                i, j, k = int(indices[0]), int(indices[1]), int(indices[2])
+                # print(f"x[{i}, {j}, {k}] = {v[1]}")
+                self.x[i, j, k] = v[1]
+
+            elif v[0][0] == "d" and v[0][1] == "[" : # == "[" pour éviter confusion avec variable delta
+                indices = v[0][2:-1].split(",") # d[i, j, k] -> indices = [i, j, k]
+                i, j, k = int(indices[0]), int(indices[1]), int(indices[2])
+                self.d[i, j, k] = v[1]
+
+            elif v[0][0] == "C" and v[0][1] != "_": # C[i] -> indices = [i]
+                indices = v[0][2:-1].split(",")
+                i = int(indices[0])
+                self.C[i] = v[1]
+
+            elif v[0] == "C_max":
+                self.C_max = v[1]
+
+            elif v[0][0] == "d" and v[0][1] == "e" : # delta[i, j, h, g, k] -> indices = [i, j, h, g, k]
+                indices = v[0][6:-1].split(",")
+                i, j, h, g, k = int(indices[0]), int(indices[1]), int(indices[2]), int(indices[3]), int(indices[4])
+                self.delta[i, j, h, g, k] = v[1]
+
+            elif v[0][0] == "l" : # l[k, m] -> indices = [k, m]
+                indices = v[0][2:-1].split(",")
+                k, m = int(indices[0]), int(indices[1])
+                self.l[k, m] = v[1]
+
+            elif v[0][:2] == "f[": # f[i, j, k] -> indices = [i, j, k]
+                indices = v[0][2:-1].split(",")
+                i, j, k = int(indices[0]), int(indices[1]), int(indices[2])
+                self.f[i, j, k] = v[1]
+
+            elif v[0][:10] == "z_auxilary": # z_auxilary[i, j, z] -> indices = [i, j, z]
+                indices = v[0][11:-1].split(",")
+                i, j, z = int(indices[0]), int(indices[1]), int(indices[2])
+                self.z_auxilary[i, j, z] = v[1]
+
+            elif v[0][:8] == "is_tutor": # is_tutor[i, j, k] -> indices = [i, j, k]
+                indices = v[0][9:-1].split(",")
+                i, j, k = int(indices[0]), int(indices[1]), int(indices[2])
+                # print(f"is_tutor[{i}, {j}, {k}] = {v[1]}")
+                self.is_tutor[i, j, k] = v[1]
+
+            elif v[0][:21] == "cognitive_load_tutors" :
+                indices = v[0][22:-1].split(",")
+                k, metier = int(indices[0]), int(indices[1])
+                # print(f"cognitive_load_tutors[{k}, {metier}] = {v[1]}")
+                self.cognitive_load_tutors[k, metier] = v[1]
+            
+            elif v[0][:28] == "cognitive_load_collaboration" :
+                indices = v[0][29:-1].split(",")
+                k, metier = int(indices[0]), int(indices[1])
+                # print(f"cognitive_load_collaboration[{k}, {metier}] = {v[1]}")
+                self.cognitive_load_collaboration[k, metier] = v[1]
+
+            elif v[0][:24] == "cognitive_load_apprentis" :
+                indices = v[0][25:-1].split(",")
+                k, metier = int(indices[0]), int(indices[1])
+                # print(f"cognitive_load_apprentis[{k}, {metier}] = {v[1]}")
+                self.cognitive_load_apprentis[k, metier] = v[1]
+
+            elif v[0][:20] == "cognitive_load_total" :
+                indices = v[0][21:-1].split(",")
+                k, metier = int(indices[0]), int(indices[1])
+                # print(f"cognitive_load_total[{k}, {metier}] = {v[1]}")
+                self.cognitive_load_total[k, metier] = v[1]
+
+            elif v[0][:3] == "Obj":
+                index_obj = int(v[0][3:])
+                self.objective_values[index_obj] = v[1]
+
+            elif v[0][:14] == "penalty_levels":
+                indices = v[0][15:-1].split(",")
+                i, j = int(indices[0]), int(indices[1])
+                # print(f"penalty_levels[{i}, {j}] = {v[1]}")
+                self.penalty_levels[i, j] = v[1]
+
+            # elif v[0][:10] == "forgetting":
+            #     indices = v[0][11:-1].split(",")
+            #     k, m = int(indices[0]), int(indices[1])
+            #     self.forgetting[k, m] = v[1]
+
+    # fonction __str__ pas à jours 
+    def __str__(self):
+        res = (f"x: {self.x.shape} \n{self.x}\n"
+               f"d: {self.d.shape} \n{self.d}\n"
+               f"C: {self.C.shape} \n{self.C}\n"
+               f"C_max: {self.C_max}\n"
+            #    f"delta: {self.delta.shape}\n{self.delta}\n"
+               f"l: {self.l.shape}\n{self.l}\n")
+        
+        return res
+
+
+
 
 COEF_LEARNING = 0.5
 COEF_TUTOR = 0.7
@@ -715,7 +845,7 @@ class Model:
                 mode.append((i, j, 3)) # 4 si O_ij est fait en solo et que worker a pas le niveau
         self.indexes["mode"] = mode
         
-    def _build_variables(self, m):
+    def _build_variables(self, m) -> tuple[dict, dict, dict, dict, dict, dict, dict, dict, dict, dict]:
 
         x = m.addVars(self.indexes["assignment"], vtype=GRB.BINARY, name="x") # x[i, j, k] = 1 if operation j of job i is assigned to worker k
         d = m.addVars(self.indexes["assignment"], vtype=GRB.CONTINUOUS, name="d") # d[i, j, k] = starting time of operation j of job i if assigned to worker k
@@ -770,7 +900,7 @@ class Model:
 
         return x, d, C, C_max, delta, l, f, z_auxilary, Level_min, Delta_min, is_tutor, has_level, cognitive_load_tutors, is_apprenti, cognitive_load_apprentis, is_collab, cognitive_load_collaboration, cognitive_load_total, penalty_makespan, penalty_deadline, in_time, penalty_levels#, forgetting
 
-    def _build_helper_variables(self):
+    def _build_helper_variables(self) -> None:
         # Ce ne sont pas des variables de décision du modèle 
         # mais des variables pour aider à la construction du modèle et le calcul de certaines contraintes ou de l'objectif
         ######################### VARIBALES PROGRAMME #########################
@@ -787,7 +917,7 @@ class Model:
         # Variable pour savoir si on a utilisé la pénalité de deadline dans les contraintes
         self.PENALTY_DEADLINE = False 
     
-    def _build_model(self, objective, weight, priority, time_limit=None, constraints_config= None, verbose=False):
+    def _build_model(self, objective, weight, priority, time_limit=None, constraints_config= None, verbose=False) -> gp.Model:
         """
         Construit le modèle de programmation linéaire
         
@@ -951,7 +1081,7 @@ class Model:
         m.write(f"../results/model_{objective}.lp")
         return m
 
-    def solve(self, objective="makespan", weight=[0,0], priority=[0,1], time_limit=None, constraints_config=None, verbose=False):
+    def solve(self, objective="makespan" , weight=[0,0], priority=[0,1], time_limit=None, constraints_config=None, verbose=False) -> Solution:
         """
         Résout le modèle et affiche les résultats
         
@@ -1046,133 +1176,6 @@ class Model:
             print(res)
         return Solution(res, self.instance)    
 
-class Solution:
-    def __init__(self, var_list, instance):
-        # Les matrices suivantes possèdent beaucoup de zéros car elles sont de la taille maximale.
-        self.x = np.zeros((instance.nb_jobs, instance.max_nb_operations, instance.nb_workers)) # x[i, j, k] = 1 if operation j of job i is assigned to worker k, 0 otherwise
-        self.d = np.zeros((instance.nb_jobs, instance.max_nb_operations, instance.nb_workers))
-        self.C = np.zeros(instance.nb_jobs)
-        self.C_max = 0
-        self.delta = np.zeros((instance.nb_jobs, instance.max_nb_operations, instance.nb_jobs, instance.max_nb_operations, instance.nb_workers))
-        
-        self.l = np.zeros((instance.nb_workers, instance.nb_professions))
-        # self.forgetting = np.zeros((instance.nb_workers, instance.nb_professions))
-        
-        
-        self.f = np.zeros((instance.nb_jobs, instance.max_nb_operations, instance.nb_workers))
-        # prise en compte qua tache peut etre fait seul sans level 
-        self.z_auxilary = np.zeros((instance.nb_jobs, instance.max_nb_operations, 4)) # z_auxilary[i,j,mode] = 1 if operation j of job i is done en solo (mode=0) ou en apprentissage (mode=1) ou en collab (mode=2)
-        
-        # ergonomic variables
-        self.is_tutor = np.zeros((instance.nb_jobs, instance.max_nb_operations, instance.nb_workers)) # is_tutor[i,j,k] = 1 if worker k is tutor for operation j of job i, 0 otherwise
-        self.cognitive_load_tutors = np.zeros((instance.nb_workers, instance.nb_professions)) # cognitive_load_tutors[k, m] = charge cognitive pour le worker k liée à l'apprentissage  en tant que tuteur pour le métier m
-        self.cognitive_load_apprentis = np.zeros((instance.nb_workers, instance.nb_professions)) # cognitive_load_apprentis[k, m] = charge cognitive pour le worker k liée à l'apprentissage  en tant que apprenti pour le métier m
-        self.cognitive_load_collaboration = np.zeros((instance.nb_workers, instance.nb_professions)) # cognitive_load_collaboration[k, m] = charge cognitive pour le worker k liée à la collaboration pour le métier m
-        self.cognitive_load_total = np.zeros((instance.nb_workers, instance.nb_professions)) # cognitive_load_total[k, m] = charge cognitive totale pour le worker k pour le métier m
-        
-        # penalty for soft CONSTRAINTS :
-        self.penalty_levels = np.zeros((instance.nb_jobs, instance.max_nb_operations)) # penalty_levels[i,j] = pénalité pour l'opération j du job i si elle est faite en solo par un worker qui n'a pas le niveau requis pour la faire
-
-        # objective values
-        self.objective_values = {}
-
-        # print("var_list", var_list)
-        for v in var_list:
-
-            if v[0][0][0] == "x":
-                indices = v[0][2:-1].split(",") # x[i, j, k] -> indices = [i, j, k]
-                i, j, k = int(indices[0]), int(indices[1]), int(indices[2])
-                # print(f"x[{i}, {j}, {k}] = {v[1]}")
-                self.x[i, j, k] = v[1]
-
-            elif v[0][0] == "d" and v[0][1] == "[" : # == "[" pour éviter confusion avec variable delta
-                indices = v[0][2:-1].split(",") # d[i, j, k] -> indices = [i, j, k]
-                i, j, k = int(indices[0]), int(indices[1]), int(indices[2])
-                self.d[i, j, k] = v[1]
-
-            elif v[0][0] == "C" and v[0][1] != "_": # C[i] -> indices = [i]
-                indices = v[0][2:-1].split(",")
-                i = int(indices[0])
-                self.C[i] = v[1]
-
-            elif v[0] == "C_max":
-                self.C_max = v[1]
-
-            elif v[0][0] == "d" and v[0][1] == "e" : # delta[i, j, h, g, k] -> indices = [i, j, h, g, k]
-                indices = v[0][6:-1].split(",")
-                i, j, h, g, k = int(indices[0]), int(indices[1]), int(indices[2]), int(indices[3]), int(indices[4])
-                self.delta[i, j, h, g, k] = v[1]
-
-            elif v[0][0] == "l" : # l[k, m] -> indices = [k, m]
-                indices = v[0][2:-1].split(",")
-                k, m = int(indices[0]), int(indices[1])
-                self.l[k, m] = v[1]
-
-            elif v[0][:2] == "f[": # f[i, j, k] -> indices = [i, j, k]
-                indices = v[0][2:-1].split(",")
-                i, j, k = int(indices[0]), int(indices[1]), int(indices[2])
-                self.f[i, j, k] = v[1]
-
-            elif v[0][:10] == "z_auxilary": # z_auxilary[i, j, z] -> indices = [i, j, z]
-                indices = v[0][11:-1].split(",")
-                i, j, z = int(indices[0]), int(indices[1]), int(indices[2])
-                self.z_auxilary[i, j, z] = v[1]
-
-            elif v[0][:8] == "is_tutor": # is_tutor[i, j, k] -> indices = [i, j, k]
-                indices = v[0][9:-1].split(",")
-                i, j, k = int(indices[0]), int(indices[1]), int(indices[2])
-                # print(f"is_tutor[{i}, {j}, {k}] = {v[1]}")
-                self.is_tutor[i, j, k] = v[1]
-
-            elif v[0][:21] == "cognitive_load_tutors" :
-                indices = v[0][22:-1].split(",")
-                k, metier = int(indices[0]), int(indices[1])
-                # print(f"cognitive_load_tutors[{k}, {metier}] = {v[1]}")
-                self.cognitive_load_tutors[k, metier] = v[1]
-            
-            elif v[0][:28] == "cognitive_load_collaboration" :
-                indices = v[0][29:-1].split(",")
-                k, metier = int(indices[0]), int(indices[1])
-                # print(f"cognitive_load_collaboration[{k}, {metier}] = {v[1]}")
-                self.cognitive_load_collaboration[k, metier] = v[1]
-
-            elif v[0][:24] == "cognitive_load_apprentis" :
-                indices = v[0][25:-1].split(",")
-                k, metier = int(indices[0]), int(indices[1])
-                # print(f"cognitive_load_apprentis[{k}, {metier}] = {v[1]}")
-                self.cognitive_load_apprentis[k, metier] = v[1]
-
-            elif v[0][:20] == "cognitive_load_total" :
-                indices = v[0][21:-1].split(",")
-                k, metier = int(indices[0]), int(indices[1])
-                # print(f"cognitive_load_total[{k}, {metier}] = {v[1]}")
-                self.cognitive_load_total[k, metier] = v[1]
-
-            elif v[0][:3] == "Obj":
-                index_obj = int(v[0][3:])
-                self.objective_values[index_obj] = v[1]
-
-            elif v[0][:14] == "penalty_levels":
-                indices = v[0][15:-1].split(",")
-                i, j = int(indices[0]), int(indices[1])
-                # print(f"penalty_levels[{i}, {j}] = {v[1]}")
-                self.penalty_levels[i, j] = v[1]
-
-            # elif v[0][:10] == "forgetting":
-            #     indices = v[0][11:-1].split(",")
-            #     k, m = int(indices[0]), int(indices[1])
-            #     self.forgetting[k, m] = v[1]
-
-    # fonction __str__ pas à jours 
-    def __str__(self):
-        res = (f"x: {self.x.shape} \n{self.x}\n"
-               f"d: {self.d.shape} \n{self.d}\n"
-               f"C: {self.C.shape} \n{self.C}\n"
-               f"C_max: {self.C_max}\n"
-            #    f"delta: {self.delta.shape}\n{self.delta}\n"
-               f"l: {self.l.shape}\n{self.l}\n")
-        
-        return res
 
 
 if __name__ == "__main__":
