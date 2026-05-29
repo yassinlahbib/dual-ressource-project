@@ -3,7 +3,11 @@ import plotly.figure_factory as ff
 import plotly.colors as pc
 import pandas as pd
 import hashlib # for generating colors for the Gantt chart based on sub-operation index
+
 import networkx as nx
+from networkx.algorithms import bipartite
+
+import random
 import matplotlib.pyplot as plt
 
 def read_file(file_path):
@@ -122,7 +126,14 @@ def read_file(file_path):
             # print("difficulty_jobs=", difficulty_jobs)
             res["difficulty_jobs"] = difficulty_jobs
 
-        
+        elif line.strip() == "<resale price of jobs>":
+            resale_price_jobs = np.zeros(nb_jobs)
+            line = file.readline().strip().split(" ")
+            for i in range(nb_jobs):
+                resale_price_jobs[i] = float(line[i])
+            # print("resale_price_jobs=", resale_price_jobs)
+            res["resale_price_jobs"] = resale_price_jobs
+
         elif line.strip() == "<jobs>":
             jobs_struct = [] # jobs_struct[i] = [operation1, operation2, ...]
             job_index = 0
@@ -466,28 +477,16 @@ def resume_forgetting_effect_workers(solution, instance, verbose=False):
     plt.show()
 
 
-# Mettre au propre la fonction suivante pour ne pas avoir des constantes en durs et pour éviter redondances
-def gantt_chart(solution, instance, color=0, render="html", save_path=None, verbose=False, separate_little=False):
-    """ 
-    Affiche le diagramme de Gantt pour une solution donnée et une instance du problème.
-    Par défaut la coloration est faite par sous-opération.
+def scheduling_to_df(solution, instance):
 
-    Args:
-        solution (Solution) : Une solution de l'instance 
-        instance (Instance) : Une instance du problème
-        color (int) :  0 -> coloration par tache.
-                       1 -> coloration par opération.
-                       2 -> coloration par job.
-                       3 -> coloration par mode (seul, apprentissage, collaboratif)
-                       pour choisir la coloration du diagramme de Gantt.
-
-                            
-        Returns:    
-            None : Affiche le diagramme de Gantt
-    """
     x = np.arange(solution.C_max)
     y = [ [] for _ in range(instance.nb_workers) ] # y[k] = [(start_time, sub_operation, processing_time), ...] for each worker k
 
+
+    # Pour savoir si une tache finit après le makespan
+    penalty_makespan = solution.penalty_makespan
+    # print("penalty_makespan=", penalty_makespan)
+    # print("borne_sup_makespan=", solution.borne_sup_makespan)
 
     dico_mode_to_str = {0: "alone", 1: "learning", 2: "collaboratively", 3: "alone without levels"} 
     ##### filling the list of tasks for each worker with their start time and processing time
@@ -502,6 +501,19 @@ def gantt_chart(solution, instance, color=0, render="html", save_path=None, verb
                     metier = int(instance.task_to_m[elementary_task])
                     level_worker = instance.levels_workers[k][metier]
                     difficulty_task = instance.tasks_difficulties[elementary_task]
+                    task_in_job_done_before_limit = solution.job_done_before_limit[i]
+
+                    if solution.borne_sup_makespan != -1  :
+                        if  start_time + processing_time > 0.001 + solution.borne_sup_makespan:
+                            penalty_makespan_current_task = start_time + processing_time - solution.borne_sup_makespan # pénalité pour la tâche courante qui dépasse le makespan
+                            bool_penalty_makespan_current_task = "after"
+                        else:
+                            penalty_makespan_current_task = 0
+                            bool_penalty_makespan_current_task = "before"
+                    else:
+                        penalty_makespan_current_task = 0
+                        bool_penalty_makespan_current_task = "before"
+
                     for z in range(4): # 4 modes : seul, apprentissage, collaboratif, seul sans levels
                         if solution.z_auxilary[i, j, z] == 1:
                             mode = dico_mode_to_str[z]
@@ -511,52 +523,24 @@ def gantt_chart(solution, instance, color=0, render="html", save_path=None, verb
                                 else:
                                     mode += " (apprentice)"
                     # processing_time = instance.sub_operations_times[sub_op_index][0] # [0] pour le momnent à modif si 2 workers
-                    y[k].append((start_time, op, processing_time, elementary_task, metier, mode, level_worker, difficulty_task))
-
-
-    
-
-
+                    y[k].append((start_time, op, processing_time, elementary_task, metier, mode, level_worker, difficulty_task, penalty_makespan_current_task, bool_penalty_makespan_current_task))
 
     
     ##### sorting the tasks for each worker by their start time
     for k in range(instance.nb_workers):
         y[k].sort()
-        if verbose:
-            print(f"Worker w{k+1} sorted tasks: ", y[k] ," : (start_time, operation, processing_time, metier, elementary_task, mode, level_worker, difficulty_task)")
+        # if verbose:
+        #     print(f"Worker w{k+1} sorted tasks: ", y[k] ," : (start_time, operation, processing_time, metier, elementary_task, mode, level_worker, difficulty_task)")
 
-    # print(y[1])
-    ########################################################################
-    ########################################################################
-    ## PAS A JOURS  CECI EST ANCIENNE VERSIONS
-    ## On à une matrice (nb_jobs, max_nb_operations, max_nb_sub_operations) 
-    ## ex: 
-    ##     J1 : so_111, so_112, so_113
-    ##          so_121, so_122, so_123
-    ##          so_131, so_132, so_133
-    ##
-    ##     J2 : so_211, so_212, so_213, so_214
-    ##          so_221, so_222, so_223, so_224
-    ##          so_231, so_232, so_233, so_234
-    ##          so_241, so_242, so_243, so_244
-    ##
-    ########################################################################
-    ########################################################################
-
-
-    if separate_little:
-        decalage_view = 0.1
-    else:
-        decalage_view = 0
 
     ##### plotting the Gantt chart
-    df = pd.DataFrame(columns=["Task", "Start", "Finish", "Finish (var. f)", "Processing time", "Operation", "Job", "mode", "Level_w", "Difficulty_task"])
+    df = pd.DataFrame(columns=["Task", "Start", "Finish", "Finish (var. f)", "Processing time", "Operation", "Job", "mode", "Level_w", "Difficulty_task", "penalty_C_max", "bool_penalty_C_max", "Job_done_before_limit"]) # dataframe for the Gantt chart, with columns for task, start time, finish time, processing time, operation, job, mode of execution, level of worker and difficulty of task
     for k in range(instance.nb_workers): # for each worker k
         for task in y[k]: # for each task of worker k
-            start_time, (i, j), processing_time, elementary_task, metier, mode, level_worker, difficulty_task = task
+            start_time, (i, j), processing_time, elementary_task, metier, mode, level_worker, difficulty_task, penalty_makespan_current_task, bool_penalty_makespan_current_task = task
             finish_time = start_time + processing_time
             df_tmp = pd.DataFrame({"Task": [f"w{k+1}"],
-                                   "Start": [start_time + decalage_view],
+                                   "Start": [start_time],
                                    "Finish": [finish_time],
                                    "Finish (var. f)" : [solution.f[i, j, k]],
                                    "Elementary task": [elementary_task],
@@ -566,23 +550,54 @@ def gantt_chart(solution, instance, color=0, render="html", save_path=None, verb
                                    "Job": ["J"+str(i+1)],
                                    "mode": [mode],
                                    "Level_w": [level_worker],
-                                   "Difficulty_task": [difficulty_task]
+                                   "Difficulty_task": [difficulty_task],
+                                   "penalty_C_max": [penalty_makespan_current_task],
+                                   "bool_penalty_C_max": [bool_penalty_makespan_current_task],
+                                   "Job_done_before_limit": ["before" if solution.job_done_before_limit[i] else "after"]
                                    })
             df = pd.concat([df, df_tmp], ignore_index=True) # ignore_index=True for following the index of df only, not df_tmp
-    if verbose:
-        print(df)
+
+    return df
+
+# Mettre au propre la fonction suivante pour ne pas avoir des constantes en durs et pour éviter redondances
+def gantt_chart(df, color=0, render="html", save_path=None, separate_little=False):
+    """ 
+    Affiche le diagramme de Gantt pour une solution donnée et une instance du problème.
+    Par défaut la coloration est faite par sous-opération.
+
+    Args:
+        df (pd.DataFrame) : Un DataFrame contenant les données du diagramme de Gantt, avec les colonnes suivantes :
+                            "Task", "Start", "Finish", "Finish (var. f)", "Processing time", "Operation", "Job", "mode", "Level_w", "Difficulty_task"
+        color (int) :  0 -> coloration par tache.
+                       1 -> coloration par opération.
+                       2 -> coloration par job.
+                       3 -> coloration par mode (seul, apprentissage, collaboratif)
+                       pour choisir la coloration du diagramme de Gantt.
+
+                            
+        Returns:    
+            None : Affiche le diagramme de Gantt
+    """
+
+    if df.empty:
+        print("No tasks to display in the Gantt chart.")
+        return df
     
-    
-    
+
+    c_max = df["Finish"].max() if not df.empty else 0
+    if separate_little:
+        df["Start"] = df["Start"] + 0.01    
     
     if color == 0:
         color_print = "Operation"
     elif color == 1:
-        color_print = "Operation"
+        color_print = "bool_penalty_C_max" # Par opération si elle est éxécutée avant ou après le time limite accordé
     elif color == 2:
         color_print = "Job"
     elif color == 3:
         color_print = "mode"
+    elif color == 4:
+        color_print = "Job_done_before_limit" # Si l'opération aapartient à un job finit avant ou après le time limite accordé
     else : 
         print("Quelle coloration souhaitez-vous pour le diagramme de Gantt ? (0 pour Sub_operation, 1 pour Operation, 2 pour Job, 3 pour mode)")
         return
@@ -592,6 +607,7 @@ def gantt_chart(solution, instance, color=0, render="html", save_path=None, verb
 
         palette = pc.qualitative.Plotly + pc.qualitative.D3 + pc.qualitative.Set3
         color_map = {op: palette[i % len(palette)] for i, op in enumerate(unique_ops)}
+        print("color_map=", color_map)
         # colours = []
         # for key in df["Elementary task"].unique(): # if we want to see colors of tasks
         #     # print("key=", key)
@@ -599,21 +615,24 @@ def gantt_chart(solution, instance, color=0, render="html", save_path=None, verb
         #     colours.append(f"#{hashlib.md5(str(key).encode()).hexdigest()[:6]}")
 
         fig = ff.create_gantt(df, group_tasks=True, index_col=color_print, colors=color_map, show_colorbar=True, showgrid_x=True, showgrid_y=True,
-                              title=f"Gantt Chart (makespan= {solution.C_max})")#, legend_title=color_print)
-        fig.update_layout(legend_title_text="Elementary task")
+                              title=f"Gantt Chart (makespan= {c_max})")#, legend_title=color_print)
+        fig.update_layout(legend_title_text="Operation(i,j)")
 
     else :
         fig = ff.create_gantt(df, group_tasks=True, index_col=color_print, show_colorbar=True, showgrid_x=True, showgrid_y=True,
-                          title=f"Gantt Chart (makespan= {solution.C_max})")
+                          title=f"Gantt Chart (makespan= {c_max})")
         
         if color == 1:
-            fig.update_layout(legend_title_text="Operation(i,j)")
-        
+            fig.update_layout(legend_title_text="feasible task")
+
         elif color == 2:
             fig.update_layout(legend_title_text="Job(i)") 
 
         elif color == 3:
             fig.update_layout(legend_title_text="Mode of execution")
+
+        elif color == 4:
+            fig.update_layout(legend_title_text="Job done before limit")
 
     
     fig.layout.xaxis.type = "linear" # for having numeric x-axis instead of date
@@ -627,7 +646,7 @@ def gantt_chart(solution, instance, color=0, render="html", save_path=None, verb
     if save_path is not None:
         fig.write_html(save_path)
 
-    return df
+    # return df
             
 def plot_precedence_graph(instance):
     """
@@ -684,28 +703,536 @@ def plot_precedence_graph_sub_operations(instance):
 
 # pas suffisant doit avoir plus d'assertion comme le fait que la tache en collab est bien fait a deux etc..  
 def check_df(df):
+    print(" ========== CHECKING CONDITIONS FOR GANTT CHART ========== ")
     for i in range(len(df)):
         if df["mode"][i] == "alone" and  df["Level_w"][i] < df["Difficulty_task"][i]:
             print("Condition 1 not satisfied for task ", i)
+            print("not satisfied condition : mode alone and level worker < difficulty task (line :", i, ")")
             return False
 
         if df["mode"][i] == "learning (tutor)" and df["Level_w"][i] < df["Difficulty_task"][i]:
             print("Condition 2 not satisfied for task ", i)
+            print("not satisfied condition : mode learning (tutor) and level worker < difficulty task (line :", i, ")")
             return False
 
         if df["mode"][i] == "learning (apprentice)" and df["Level_w"][i] > df["Difficulty_task"][i]:
             print("Condition 3 not satisfied for task ", i)
+            print("not satisfied condition : mode learning (apprentice) and level worker > difficulty task (line :", i, ")")
             return False
 
         if df["mode"][i] == "collaboratively" and df["Level_w"][i] < df["Difficulty_task"][i]:
             print("Condition 4 not satisfied for task ", i)
+            print("not satisfied condition : mode collaboratively and level worker < difficulty task (line :", i, ")")
             return False
 
         if df["mode"][i] == "alone without levels" and df["Level_w"][i] >= df["Difficulty_task"][i]:
             print("Condition 5 not satisfied for task ", i)
+            print("not satisfied condition : mode alone without levels and level worker >= difficulty task (line :", i, ")")
             return False
 
+    print("All conditions are satisfied for the Gantt chart.")
     return True
+
+
+
+
+# CHECK PARETO DOMINANCE (ALL OBJECTIVES ARE MAXIMIZED)
+
+def get_pareto_optimal(x):
+    """
+    Retourne les points de x qui sont Pareto optimaux.
+    Arg :
+        x : np.ndarray of shape (n_solutions, 3)
+            x[0] = profit (maximize)
+            x[1] = skills (maximize)
+            x[2] = - cognitive load (maximize)
+    """
+    
+    idx_dominated = []
+
+    # point dans l'espace des critères
+    if len(x.shape) == 2 : # size (n_solutions, 3)
+
+        for i in range(len(x)):
+            if i not in idx_dominated:
+
+                for j in range(i+1, len(x)):
+                    if j not in idx_dominated:
+
+                        if domine(x[i], x[j]):
+                            idx_dominated.append(j)
+                            # print("Point ", j, " is dominated by point ", i)
+                        elif domine(x[j], x[i]):
+                            idx_dominated.append(i)
+                            # print("Point ", i, " is dominated by point ", j)
+                        else:
+                            continue
+        
+        # print("idx_dominated=", idx_dominated)
+        idx_dominated = list(set(idx_dominated)) # pour éviter les redondances
+        for i in range(len(idx_dominated)-1, -1, -1): # from len -1 to 0
+            # print("Point ", idx_dominated[i], " is dominated by another point.")
+            x = np.delete(x, idx_dominated[i], axis=0)
+        return x, idx_dominated
+
+    # point dans l'espace des critères et dans l'espace de lorenz
+    if len(x.shape) == 3 : # size (n_solutions, 2, nb_objectives)
+
+        for i in range(len(x)):
+            if i not in idx_dominated:
+
+                for j in range(i+1, len(x)):
+                    if j not in idx_dominated:
+
+                        if domine(x[i,1], x[j,1]):
+                            idx_dominated.append(j)
+                        elif domine(x[j,1], x[i,1]):
+                            idx_dominated.append(i)
+                        else:
+                            continue
+        
+        # print("idx_dominated=", idx_dominated)
+        for i in range(len(idx_dominated)-1, -1, -1): # from len -1 to 0
+            # print("Point ", idx_dominated[i], " is dominated by another point.")
+            x = np.delete(x, idx_dominated[i], axis=0)
+        return x, idx_dominated
+
+def domine(x, y):
+    """
+    Retourne True si x domine y, False sinon.
+    Arg :
+        x : np.ndarray of shape (3,)
+            x[0] = profit (maximize)
+            x[1] = skills (maximize)
+            x[2] = - cognitive load (maximize)
+        y : np.ndarray of shape (3,)
+            y[0] = profit (maximize)
+            y[1] = skills (maximize)
+            y[2] = - cognitive load (maximize)
+    """
+
+    return (x[0] >= y[0] and x[1] >= y[1] and x[2] >= y[2]) and (x[0] > y[0] or x[1] > y[1] or x[2] > y[2])
+
+def check_dominance_pareto(x):
+    """
+    Retourne True si aucun point de x ne domine un autre point de x, False sinon.
+    Arg :
+        x : np.ndarray of shape (n_solutions, 3)
+            x[0] = profit (maximize)
+            x[1] = skills (maximize)
+            x[2] = - cognitive load (maximize)
+    """
+
+    for i in range(len(x)):
+        for j in range(i+1, len(x)):
+            if domine(x[i], x[j]) or domine(x[j], x[i]):
+                print("Points ", i, " and ", j, " are not Pareto optimal.")
+                return False
+    return True
+
+def get_lorenz_vector(x):
+    """
+    Retourne le vecteur de Lorenz de x.
+    Arg :
+        x : np.ndarray of shape (n_solutions, 3)
+            x[0] = profit (maximize)
+            x[1] = skills (maximize)
+            x[2] = - cognitive load (maximize)
+    """
+
+    lorenz_vector = []
+    for i in range(len(x)):
+        sorted_x = np.sort(x[i])
+        lorenz_vector.append((x[i], np.cumsum(sorted_x)))
+    lorenz_vector = np.array(lorenz_vector)
+    return lorenz_vector # size (n_solutions, 2, nb_objectives)
+
+
+# VIZUALIZATION OF EACH OPERATION, EACH WORKER CAN OPERATE
+def visualization_before_scheduling(instance, not_qualified=False):
+    
+
+    res = instance.qualified_workers_for_task(verbose=False)
+    # print("res=", type(res))
+    # print("res=", len(res))
+    qualified_workers, not_qualified_but_at_most_one = res[0], res[1]
+    # print("qualified_workers=", qualified_workers)
+    # print("not_qualified_but_at_most_one=", not_qualified_but_at_most_one)
+    # for i in range(instance.nb_jobs):
+    #     for j in range(len(instance.jobs_struct[i])):
+    #         if len(qualified_workers[i][j]) == 0 :
+    #             print("pas de worker qualifié pour faire l'opération ", (i+1, j+1))
+    #             if len(not_qualified_but_at_most_one[i][j]) > 0:
+    #                 print("mais il y a des workers qui ont au plus un niveau de différence pour faire l'opération ", (i+1, j+1), " : ", not_qualified_but_at_most_one[i][j])
+
+
+
+    G_all_jobs = nx.DiGraph() # graphe de précédence de toutes les opérations de tous les jobs
+    
+    for i in range(instance.nb_jobs):
+        nb_op_job_i = len(instance.jobs_struct[i])
+        G_all_jobs.add_nodes_from([(f"{i+1},{j+1}", {"workers": qualified_workers[i][j]}) for j in range(nb_op_job_i)])
+        for j in range(nb_op_job_i):
+            for j_prime in range(nb_op_job_i):
+                if instance.constraints_precedence_operations[i][j][j_prime] == 1: # si j est un prédécesseur de j_prime
+                    G_all_jobs.add_edge(f"{i+1},{j+1}", f"{i+1},{j_prime+1}") # ajout de l'arc j --> j_prime
+
+    # color des noeuds en fonction de si des workers sont qualifiés pour faire l'opération
+    for i in range(instance.nb_jobs):
+        for j in range(len(instance.jobs_struct[i])):
+            if len(qualified_workers[i][j]) > 0 :
+                G_all_jobs.nodes[f"{i+1},{j+1}"]['node_color'] = 'green'
+            else : 
+                G_all_jobs.nodes[f"{i+1},{j+1}"]['node_color'] = 'red'
+
+                if not_qualified:
+                    G_all_jobs.nodes[f"{i+1},{j+1}"]['at_most_diff_of_one'] = not_qualified_but_at_most_one[i][j]
+                    if len(not_qualified_but_at_most_one[i][j]) > 0:
+                        G_all_jobs.nodes[f"{i+1},{j+1}"]['node_color'] = 'orange'
+                    else :
+                        G_all_jobs.nodes[f"{i+1},{j+1}"]['node_color'] = 'red'
+
+                    
+
+    ColorLegend = {
+        "job with qualified workers": 'green',
+        "job without qualified workers": 'red'
+
+    }
+
+    if not_qualified:
+        ColorLegend["job have at most one level of difference"] = 'orange'
+
+    
+    # for n in G_all_jobs.nodes():
+    #     print(n, G_all_jobs.nodes[n])
+
+
+    legend_elements = []
+    print("ColorLegend=", ColorLegend)
+    for i in range(len(ColorLegend)):
+        label = list(ColorLegend.keys())[i]
+        color = list(ColorLegend.values())[i]
+        legend_elements.append(plt.Line2D([0], [0], marker='o', color='w', label=label, markerfacecolor=color, markersize=10))
+                
+
+
+    color_map = [G_all_jobs.nodes[node]['node_color'] for node in G_all_jobs.nodes()]
+    
+    # pos_all_jobs = nx.spring_layout(G_all_jobs)
+    # ======= POSITIONS OF NODES AND LABELS ======
+    pos_all_jobs = {}
+    x_spacing = 2.0
+    y_spacing = 1.5
+
+    for i in range(instance.nb_jobs):
+        nb_op_job_i = len(instance.jobs_struct[i])
+
+        #ligne job i
+        y = -i * y_spacing
+
+        for j in range(nb_op_job_i):
+            node = f"{i+1},{j+1}"
+
+            # colonne operation j 
+            x = j * x_spacing
+
+            pos_all_jobs[node] = (x, y)
+    
+    pos_all_jobs = {
+        node: (x, y-0.25) for node, (x, y) in pos_all_jobs.items()
+    }
+
+    plt.figure(figsize=(16, 8))
+
+    # ====== PLOT RESALE PRICE OF JOBS ======
+    for i in range(instance.nb_jobs):
+        x = pos_all_jobs[f"{i+1},1"][0] # x de la première opération de chaque job
+        y = pos_all_jobs[f"{i+1},1"][1] # y de la première opération de chaque job
+        
+        plt.text(x, y+0.3, 
+                 f"{instance.resale_price_jobs[i]:.1f} EUR",
+                   fontsize=10, 
+                   fontweight='bold', 
+                   color='blue'
+                )
+        
+
+
+
+
+    # plt.subplots_adjust(right=1) # pour laisser de la place à la légende à droite du graphique
+
+    labels = {node: f"{node}\n{G_all_jobs.nodes[node]['workers']}" for node in G_all_jobs.nodes() if len(G_all_jobs.nodes[node]['workers']) > 0}
+    labels.update({node: f"{node}\n\n{G_all_jobs.nodes[node]['at_most_diff_of_one']}" for node in G_all_jobs.nodes() if len(G_all_jobs.nodes[node].get('at_most_diff_of_one', [])) > 0})
+
+    nx.draw(G_all_jobs, pos_all_jobs, with_labels=True, labels=labels, node_color=color_map)
+    
+    plt.legend(handles=legend_elements,
+                loc ="upper right",
+                title="Qualification of workers for operations",
+                bbox_to_anchor=(1.02, 0.5)
+            )
+    
+
+    plt.title(f"Graphe de précédence de toutes les opérations de tous les jobs")
+    plt.show()
+
+def visualization_after_scheduling(instance, solution, df):
+
+    # to know if a job is done or not,
+    jobe_done = solution.job_done # size (nb_jobs,) : job_done[i] = 1 if job i is done, 0 otherwise
+    
+
+    # ====== GRAPH CREATION WITH LABEL JOB DONE ======
+    G_all_jobs = nx.DiGraph() # graphe de précédence de toutes les opérations de tous les jobs
+    for i in range(instance.nb_jobs):
+        nb_op_job_i = len(instance.jobs_struct[i])
+        G_all_jobs.add_nodes_from([(f"{i+1},{j+1}", {"job_done": jobe_done[i]}) for j in range(nb_op_job_i)])
+        for j in range(nb_op_job_i):
+            for j_prime in range(nb_op_job_i):
+                if instance.constraints_precedence_operations[i][j][j_prime] == 1: # si j est un prédécesseur de j_prime
+                    G_all_jobs.add_edge(f"{i+1},{j+1}", f"{i+1},{j_prime+1}") # ajout de l'arc j --> j_prime
+
+
+    ColorLegend = {
+        "alone": 'dodgerblue',
+        "learning": 'magenta',
+        "collaboratively": 'green',
+        "alone without levels": 'orange',
+        "job not done": 'red'
+    }
+
+    # groupement par opération pour faciliter l'iteration sur le df
+    df_grouped = (
+        df[["Operation", "mode", "Task", "bool_penalty_C_max"]]
+        .groupby(["Operation"])
+        .agg({
+            "mode": "first", # prendre le premier mode d'execution pour chaque operation (identique une opération)
+            "Task": list, #liste des workers associés
+            "bool_penalty_C_max": "first" # prendre la première valeur de la colonne bool_penalty_C_max pour chaque operation
+        })
+    ).reset_index()
+
+    for i in range(len(df_grouped)):
+        op = df_grouped.loc[i, "Operation"]
+        mode = df_grouped.loc[i, "mode"]
+        w_list = df_grouped.loc[i, "Task"] # liste des workers qui ont effectué l'opération (i,j)
+        bool_penalty_C_max = df_grouped.loc[i, "bool_penalty_C_max"]
+        if mode == "alone":
+            color = ColorLegend["alone"]
+        elif mode.startswith("learning"):
+            color = ColorLegend["learning"]
+        elif mode == "collaboratively":
+            color = ColorLegend["collaboratively"]
+        elif mode == "alone without levels":
+            color = ColorLegend["alone without levels"]
+        else:
+            color = 'white' # default color if mode is not recognized
+
+        # attribution des labels et des couleurs de chaque noeuds
+        i, j = op.strip("()").split(",")
+        G_all_jobs.nodes[f"{i},{j}"]['node_color'] = color
+        G_all_jobs.nodes[f"{i},{j}"]['workers'] = w_list
+        if bool_penalty_C_max == "after":
+            G_all_jobs.nodes[f"{i},{j}"]["limit_makespan_exceeded"] = True
+        else:
+            G_all_jobs.nodes[f"{i},{j}"]["limit_makespan_exceeded"] = False
+
+    # ======= POSITIONS OF NODES AND LABELS ======
+    pos_all_jobs = {}
+    x_spacing = 2.0
+    y_spacing = 1.5
+
+    for i in range(instance.nb_jobs):
+        nb_op_job_i = len(instance.jobs_struct[i])
+
+        #ligne job i
+        y = -i * y_spacing
+
+        for j in range(nb_op_job_i):
+            node = f"{i+1},{j+1}"
+
+            # colonne operation j 
+            x = j * x_spacing
+
+            pos_all_jobs[node] = (x, y)
+    
+    pos_labels = {
+        node: (x, y-0.25) for node, (x, y) in pos_all_jobs.items()
+    }
+
+        
+    #====== COLOR FOR NODES OR JOB NOT DONE ======
+    for i in range(instance.nb_jobs):
+        if jobe_done[i] == 0:
+            for j in range(len(instance.jobs_struct[i])):
+                G_all_jobs.nodes[f"{i+1},{j+1}"]['node_color'] = 'red'
+
+    
+    #===== LEGEND FOR COLORS NODES ====== 
+    legend_elements = []
+    for i in range(len(ColorLegend)):
+        label = list(ColorLegend.keys())[i]
+        color = list(ColorLegend.values())[i]
+        legend_elements.append(plt.Line2D([0], [0], marker='o', color='w', label=label, markerfacecolor=color, markersize=10))
+        
+   #===== LEGEND FOR NODES WITH TIME NO FINISH AT TIME  ====== 
+    legend_elements.append(
+        plt.Line2D(
+            [0], [0],
+            marker='o', 
+            color='darkred', 
+            label="task not finished at time limit", 
+            markerfacecolor='white', # pour avoir que le contoure coloré en rouge et pas le remplissage
+            markersize=10, 
+            markeredgewidth=3 # pour avoir un ring plus épais et visible
+        )
+    )
+
+    #====== COLOR MAP FOR NODES ======
+    color_map = [G_all_jobs.nodes[node]['node_color'] for node in G_all_jobs.nodes()]
+
+
+    # ====== LABELS OF WORKERS FOR EACH NODE ======
+    worker_labels = {}
+    for n, d in G_all_jobs.nodes(data=True):
+        if "workers" in d :
+            worker_labels[n] = [str(n)] + d['workers'] + ["*"] if d.get("limit_makespan_exceeded", False) else [str(n)] +d['workers'] # ajouter une indication si la tâche est responsable du dépassement du makespan
+        else:
+            worker_labels[n] = [str(n)] # Pour les jobs not done pas de workers associés
+
+
+    labels = {node: f"{node}\n{G_all_jobs.nodes[node].get('workers', '')}" for node in G_all_jobs.nodes()}
+
+
+
+    plt.figure(figsize=(12, 8))
+
+    # ====== PLOT RESALE PRICE OF JOBS ======
+    for i in range(instance.nb_jobs):
+        x = pos_all_jobs[f"{i+1},1"][0] # x de la première opération de chaque job
+        y = pos_all_jobs[f"{i+1},1"][1] # y de la première opération de chaque job
+        if jobe_done[i] == 0:
+            color_price = 'red'
+        else:
+            color_price = 'darkgreen'
+            for j in range(len(instance.jobs_struct[i])):
+                if G_all_jobs.nodes[f"{i+1},{j+1}"].get("limit_makespan_exceeded", False):
+                    color_price = 'peru'
+                    break
+
+        plt.text(x, y+0.3, 
+                 f"{instance.resale_price_jobs[i]:.1f} EUR",
+                   fontsize=10, 
+                   fontweight='extra bold', 
+                   color=color_price
+                )
+
+    node_size = 300
+    ring_size = 3*node_size # + 200 
+
+    edges = nx.draw_networkx_edges(
+        G_all_jobs, 
+        pos_all_jobs, 
+        edge_color='black', 
+        width=1.5
+    )
+
+    nodes = nx.draw_networkx_nodes(G_all_jobs,
+            pos_all_jobs,
+            node_color=color_map,
+            node_size=node_size
+    )
+
+
+    #seuelemtn les noeud avec label limit_makespan_exceeded = True ont un ring gris pour indiquer qu'ils sont responsables du dépassement du makespan, les autres noeuds n'ont pas de ring
+    G_all_jobs_rings = nx.Graph()
+    for n, d in G_all_jobs.nodes(data=True):
+        if d.get("limit_makespan_exceeded", False):
+            G_all_jobs_rings.add_node(n, **d) # ajouter les mêmes attributs que dans G_all_jobs pour pouvoir les utiliser pour les labels
+
+    rings = nx.draw_networkx_nodes(
+        G_all_jobs_rings,
+        pos_all_jobs,
+        node_size=ring_size,
+        node_color='darkred'
+    )
+
+    nx.draw_networkx_labels(G_all_jobs,
+                            pos_labels,
+                            labels=labels,
+                            font_color='black'
+    )
+
+    plt.legend(handles=legend_elements,
+                loc ="center left", 
+                title="Mode of execution and job status", 
+                bbox_to_anchor=(1.02, 0.5))
+    
+    nodes.set_zorder(2)
+    rings.set_zorder(1)
+
+    plt.title(f"Graphe de précédence de toutes les opérations de tous les jobs")
+    plt.show()
+
+
+
+def visualization_list_of_solutions(instance, solution_list, doing=True):
+    """
+    doing = True : visualiser les tâches faites par chaque solution
+    doing = False : visualiser les tâches non faites par chaque solution
+    """
+    
+    G = nx.Graph()
+    nb_jobs = instance.nb_jobs
+
+    for i in range(len(solution_list)):
+        s_curr = solution_list[i]
+        G.add_nodes_from([(f"s{i}", {"objectifs": list(s_curr.objective_values.values()) })], bipartite=0)
+    
+    for i in range(nb_jobs):
+        G.add_nodes_from([(f"J{i}", {"diff_job": instance.difficulty_jobs[i]})], bipartite=1)
+
+
+    for node in G.nodes(data=True):
+        # print("node=", node)
+        # print(node[0])
+        # print(node[1])
+        if node[1]["bipartite"] == 0:
+            G.nodes[node[0]]["subset"] = 0
+        else:
+            G.nodes[node[0]]["subset"] = 1
+
+    colorMAP = []
+    # couleur basé sur indices de la solution
+    for i in range(len(solution_list)):
+        colorMAP.append(plt.cm.tab10(i % 10)) 
+
+    for i in range(len(solution_list)):
+        s_curr = solution_list[i]
+        for j in range(nb_jobs):
+            if doing == True :
+                if s_curr.job_done[j] == 1:
+                    G.add_edge(f"s{i}", f"J{j}")
+                    G.edges[f"s{i}", f"J{j}"]['color'] = colorMAP[i]
+            else :
+                if s_curr.job_done[j] == 0:
+                    G.add_edge(f"s{i}", f"J{j}")
+                    G.edges[f"s{i}", f"J{j}"]['color'] = colorMAP[i]
+
+
+
+    plt.figure(figsize=(12, 8))
+    pos = nx.multipartite_layout(G)
+    nx.draw(G,
+            pos,
+            with_labels=True,
+            edge_color=[G.edges[edge]['color'] for edge in G.edges()]
+            )
+
+
+    
 
 
 
