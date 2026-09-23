@@ -42,13 +42,17 @@ class Model:
 
     def _add_physical_constraints(self, m, x, d, C, C_max, z_auxilary, Level_min, Delta_min, f, delta, job_done, task_done):
     
+        ##==================================================================================================================================
+        ##==================================================================================================================================
+
         # constraint :
         # At most 2 workers per tasks
         for i in range(self.instance.nb_jobs):
             for j in range(len(self.instance.jobs_struct[i])): # for all operations except the first one of each job
                 m.addConstr((gp.quicksum(x[i, j, k] for k in range(self.instance.nb_workers)) <= 2), name=f"max_assignment_operation_{i}_{j}")
         
-
+##==================================================================================================================================
+##==================================================================================================================================
     #    # NOW : tasks can be not assigned if they are too difficult or if he do not respect limit Cmax time
     #     # constraint : 
     #     # All operations must be assigned to at least one worker
@@ -56,22 +60,30 @@ class Model:
     #         for j in range(len(self.instance.jobs_struct[i])):
     #             m.addConstr((gp.quicksum(x[i, j, k] for k in range(self.instance.nb_workers)) >= 1), name=f"min_sub_operation_assignment_{i}_{j}")
 
+############ TEST SANS LES C_I (11/09/2026)
+        # # constraint : C[i] >= d[i, j, k] + processing_time_operations
+        # # Completion time of each job
+        # # if we minimize makespan, we can have all C[i] = C_max, if we minimize sum of C[i], C[i] will be the completion time of job i
+        # for i in range(self.instance.nb_jobs):
+        #     for j in range(len(self.instance.jobs_struct[i])):
+        #         for k in range(self.instance.nb_workers):
+        #             index_j = self.instance.jobs_struct[i][j]
+        #             M = 0
+        #             f_ijk = d[i,j,k] + self.instance.tasks_times[index_j][0] * z_auxilary[i,j,0] + self.instance.tasks_times[index_j][1] * z_auxilary[i,j,1] +self.instance.tasks_times[index_j][2] * z_auxilary[i,j,2] + (self.instance.tasks_times[index_j][0] * z_auxilary[i,j,3]*PERC_SOLO_NO_LEVEL_TIME) - M * (1 - x[i,j,k])
+        #             m.addConstr((C[i] >= f_ijk), name=f"completion_time_{i}_{j}_{k}")
+    
 
-        # constraint : C[i] >= d[i, j, k] + processing_time_operations
-        # Completion time of each job
-        # if we minimize makespan, we can have all C[i] = C_max, if we minimize sum of C[i], C[i] will be the completion time of job i
+        # # constraint : C_max >= C[i] for all i
+        # for i in range(self.instance.nb_jobs):
+        #     m.addConstr((C_max >= C[i]), name=f"makespan_{i}")
+
         for i in range(self.instance.nb_jobs):
             for j in range(len(self.instance.jobs_struct[i])):
                 for k in range(self.instance.nb_workers):
-                    index_j = self.instance.jobs_struct[i][j]
-                    M = 0
-                    f_ijk = d[i,j,k] + self.instance.tasks_times[index_j][0] * z_auxilary[i,j,0] + self.instance.tasks_times[index_j][1] * z_auxilary[i,j,1] +self.instance.tasks_times[index_j][2] * z_auxilary[i,j,2] + (self.instance.tasks_times[index_j][0] * z_auxilary[i,j,3]*PERC_SOLO_NO_LEVEL_TIME) - M * (1 - x[i,j,k])
-                    m.addConstr((C[i] >= f_ijk), name=f"completion_time_{i}_{j}_{k}")
+                    m.addConstr((C_max >= f[i,j,k]), name=f"makespan_{i}_{j}_{k}")
     
-
-        # constraint : C_max >= C[i] for all i
-        for i in range(self.instance.nb_jobs):
-            m.addConstr((C_max >= C[i]), name=f"makespan_{i}")
+##==================================================================================================================================
+##==================================================================================================================================
 
 
         # constraint : auxilary variables z_ijs0, z_ijs1, z_ijs2 do not take value of 1 for the same operation and fixed according to the number of workers assigned to the operation
@@ -86,7 +98,8 @@ class Model:
         #         # si 2 workers alors soit apprentissage soit collab
         #         m.addConstr((z_auxilary[i,j,1] + z_auxilary[i,j,2] <= 1), name=f"if_two_workers_then_apprentissage_or_collab_{i}_{j}") 
 
-
+##==================================================================================================================================
+##==================================================================================================================================
         ########### NEW -> SOFT CONSTRAINTS with penalty in the objective function if not respected ##########
         for i in range(self.instance.nb_jobs):
             for j in range(len(self.instance.jobs_struct[i])):  
@@ -96,7 +109,8 @@ class Model:
                 m.addConstr(((gp.quicksum(x[i,j,k] for k in range(self.instance.nb_workers)) == 1 * z_auxilary[i,j,0] + 1 * z_auxilary[i,j,3] + 2 * z_auxilary[i,j,1] + 2 * z_auxilary[i,j,2])), name=f"z_assignment_2_{i}_{j}")
                 # si 2 workers alors soit apprentissage soit collab
                 # m.addConstr((z_auxilary[i,j,1] + z_auxilary[i,j,2] <= 1), name=f"if_two_workers_then_apprentissage_or_collab_{i}_{j}") 
-
+##==================================================================================================================================
+##==================================================================================================================================
 
         # constraint : LINEARISATION of MIN
         # Level_min = min_{k}{x_ijsk * level_km} with m = metier of O_ij
@@ -123,13 +137,22 @@ class Model:
 
         for i in range(self.instance.nb_jobs):
             for j in range(len(self.instance.jobs_struct[i])):
+                
                 # comme une tache peut ne pas être affécter alors passer de "== 1" à "<= 1"
                 m.addConstr((gp.quicksum(Delta_min[i,j,k] for k in range(self.instance.nb_workers)) <= 1), name=f"linearization_min_binary_{i}_{j}") # Delta_min_ijsk doit prendre 1 pour le k tq il a le level minimal pour cette tache
+        
+                # Pour force Delta_min[ijk] à etre à 1 si l'operation a ete assigné à au moins 1 worker (AJOUTE RECEMMENT LE 12/06/2026) car apercu d'un beugue
+                m.addConstr((gp.quicksum(Delta_min[i,j,k] for k in range(self.instance.nb_workers)) >= task_done[i,j]), name=f"linearization_min_binary3_{i}_{j}") # si la tache est faite alors il y a au moins un worker avec Delta_min_ijk = 1 pour cette tache
+                
+
+        
         # forcer que Delta_min[ijk] peut prendre la valeur de 1 que pour un worker affécté à la tache
         for i in range(self.instance.nb_jobs):
             for j in range(len(self.instance.jobs_struct[i])):
                 for k in range(self.instance.nb_workers):
                     m.addConstr((Delta_min[i,j,k] <= x[i,j,k]), name=f"linearization_min_binary2_{i}_{j}_{k}") # Delta_min_ijsk doit être égal à 0 si le worker k n'est pas assigné à la tache (i,j)
+
+
 
         # constraint : to know the mode of an operation (solo, apprentissage or collab) with the variable Level_min to fixe auxilary variables z_ijs0, z_ijs1, z_ijs2
         M = LEVEL_MAX
@@ -185,6 +208,8 @@ class Model:
                     # m.addConstr((f[i,j,k] >= time - M * (1 - x[i,j,k])), name=f"definition_f2_{i}_{j}_{k}") 
                     m.addConstr((f[i,j,k] == time), name=f"definition_f3_{i}_{j}_{k}") # si x[i,j,k] = 1 alors f[i,j,k] = d[i,j,k] + time, sinon f[i,j,k] est libre mais doit respecter les autres contraintes du modeles pour ne pas être trop grand
 
+##==================================================================================================================================
+##==================================================================================================================================
         # constraint : OVERLAP
         M = 1000
         for k in range(self.instance.nb_workers):
@@ -209,7 +234,8 @@ class Model:
                                 m.addConstr((d[i,j,k] >= f_hgk - M * delta[i,j,h,g,k]), name=f"overlap1_{i}_{j}_{h}_{g}_{k}")
                                 m.addConstr((d[h,g,k] >= f_ijk - M * (1 - delta[i,j,h,g,k])), name=f"overlap2_{i}_{j}_{h}_{g}_{k}")
 
-
+##==================================================================================================================================
+##==================================================================================================================================
 
         # constraint : if x[i, j, k] = 0 then d[i, j, k] = 0 for all i, j, k
         # contrainte big M pour forcer d[i,j,k] à 0 si x[i,j,k] = 0
@@ -218,6 +244,9 @@ class Model:
             for j in range(len(self.instance.jobs_struct[i])):
                 for k in range(self.instance.nb_workers):
                     m.addConstr((d[i,j,k] <= M * x[i,j,k]), name=f"start_time_zero_if_not_assigned_{i}_{j}_{k}")
+
+##==================================================================================================================================
+##==================================================================================================================================
 
         # Si toutes les taches sont affecté alors correcte, mais comme on peut avoir des taches non affecté
         # alors il y a un problème car si tache 1 avant tache 2 et tache 1 pas affecté alors tache 2 peut être affecté et d2 > f1 = 0 alors que tache 1 doit être avant tache 2
@@ -237,6 +266,18 @@ class Model:
                             # ajout du fait que la tache i+1 doit etre effectué que si la tache i est effectué pour éviter les problèmes de tache non affecté et de precedence
                             # car maintenant des taches peuvent ne pas etre affecté 
                             m.addConstr((task_done[i,j] >= task_done[i,j_prime]), name=f"precedence_operations_task_done_{i}_{j}_{j_prime}")
+    
+##==================================================================================================================================
+##==================================================================================================================================
+     
+        for i in range(self.instance.nb_jobs):
+            for j in range(len(self.instance.jobs_struct[i])):
+                for k in range(self.instance.nb_workers):
+                    m.addConstr((task_done[i,j] >= x[i,j,k]), name=f"precedence_operations_task_done2_{i}_{j}")
+
+
+##==================================================================================================================================
+##==================================================================================================================================
 
         # constraint : if collab is not possible then z_auxilary[i,j,2] = 0
         for i in range(self.instance.nb_jobs):
@@ -245,6 +286,8 @@ class Model:
                 if self.instance.tasks_times[index_j][2] == -1 :
                     m.addConstr((z_auxilary[i,j,2] == 0), name=f"no_collab_{i}_{j}")
 
+##==================================================================================================================================
+##==================================================================================================================================
 
         # constraint : if two worker k1 and k2 are assigned to the same task (i,j) then the starting time of the task for both workers must be the same : d[i,j,k1] = d[i,j,k2]
         M = 1000
@@ -255,11 +298,18 @@ class Model:
                         m.addConstr((d[i,j,k1] <= d[i,j,k2] + M * (2 - (x[i,j,k1] + x[i,j,k2]))), name=f"same_start_time1_{i}_{j}_{k1}_{k2}")
                         m.addConstr((d[i,j,k2] <= d[i,j,k1] + M * (2 - (x[i,j,k1] + x[i,j,k2]))), name=f"same_start_time2_{i}_{j}_{k1}_{k2}")
 
+##==================================================================================================================================
+##==================================================================================================================================
+
         # constraint :
         # if task (i,j) is assigned to at least one worker then task_done[i,j] = 1, else task_done[i,j] = 0
         for i in range(self.instance.nb_jobs):
             for j in range(len(self.instance.jobs_struct[i])):
                 m.addConstr((task_done[i,j] <= gp.quicksum(x[i,j,k] for k in range(self.instance.nb_workers))), name=f"task_done_definition_{i}_{j}")
+
+
+##==================================================================================================================================
+##==================================================================================================================================
 
         # constraint :
         # if all tasks of a job i are done then job_done[i] = 1, else job_done[i] = 0
@@ -268,14 +318,8 @@ class Model:
                 m.addConstr((job_done[i] <= task_done[i,j]), name=f"job_done_definition_{i}_{j}") # job_done[i] = 1 if all tasks of job i are done, else job_done[i] = 0
         
 
-
-        # si job done = 0 alors alors ne pas affecté les tache de ce job :
-        for i in range(self.instance.nb_jobs):
-            for j in range(len(self.instance.jobs_struct[i])):
-                for k in range(self.instance.nb_workers):
-                    m.addConstr((x[i,j,k] <= job_done[i]), name=f"no_assignment_if_job_not_done_{i}_{j}_{k}") # if job is not done then no task of this job can be assigned
-
-
+##==================================================================================================================================
+##==================================================================================================================================
 
         # Un opérateur ne peut faire une tache en tant qu'apprenti si son niveau de différence avec la tache est >1
         for i in range(self.instance.nb_jobs):
@@ -285,12 +329,10 @@ class Model:
                     index_m = self.instance.task_to_m[index_j]
                     if self.instance.levels_workers[k][index_m] + 1 < self.instance.tasks_difficulties[index_j]:
                         m.addConstr((x[i,j,k] == 0), name=f"no_assignment_if_level_diff_greater_than_1_{i}_{j}_{k}") 
-                        # en mettant la conteainte suivante, j'interdis la tache ij d'être fait en apprentissage, si un worker n' a pas le niveau 
-                        # suffisant pour faire la tache, alors que d'autre worker peuvent la faire en tant qu'apprentis sa se trouve (mieux vaux tard que jamais pour s'en rendre compte)
-                        
-                        # m.addConstr((z_auxilary[i,j,1] == 0), name=f"no_apprenticeship_if_level_diff_greater_than_1_{i}_{j}_{k}")
 
-    def _worker_of_the_first_operation_must_do_all_operations_of_the_job(self, m, x, y, job_done):
+        
+
+    def _worker_of_the_first_operation_must_do_all_operations_of_the_job(self, m, x, y, job_done, task_done):
 
         # HYPOTHESE :
         # La première opération de chaque job doit être réalisé par un seul worker.
@@ -309,14 +351,27 @@ class Model:
 
         # Si le job est terminé alors un worker de base à du etre dessus
         # Cette contrainte force à ne choisir qu'un worker k par y_ik
-        for i in range(self.instance.nb_jobs):
-            m.addConstr((job_done[i] <= gp.quicksum(y[i,k] for k in range(self.instance.nb_workers))), name=f"worker_base_job_done_{i}") 
 
-        # Ce worker choisit doit avoir fait tout les opérationd de ce job
+        # contrainte avant de prendre en compte qu'in peut ne pas finir un job
+        # for i in range(self.instance.nb_jobs):
+        #     m.addConstr((job_done[i] <= gp.quicksum(y[i,k] for k in range(self.instance.nb_workers))), name=f"worker_base_job_done_{i}") 
+
+        for i in range(self.instance.nb_jobs):
+            # Un seul worker de base par job : garantit qu'un même worker suit toutes les opérations faites
+            m.addConstr(gp.quicksum(y[i,k] for k in range(self.instance.nb_workers)) <= 1, name=f"at_most_one_base_worker_{i}")
+            for j in range(len(self.instance.jobs_struct[i])):
+                # Une opération ne peut être faite que si un worker de base est désigné pour ce job
+                m.addConstr(task_done[i,j] <= gp.quicksum(y[i,k] for k in range(self.instance.nb_workers)), name=f"worker_base_task_done_{i}_{j}")
+
+        # Le worker de base doit être présent sur chaque opération effectuée, mais pas sur les opérations non faites.
+        # Linéarisation de x[i,j,k] >= y[i,k] AND task_done[i,j] :
+        #   - y[i,k]=1 et task_done[i,j]=1 → x[i,j,k] >= 1  (base worker forcé sur cette op)
+        #   - y[i,k]=1 et task_done[i,j]=0 → x[i,j,k] >= 0  (pas de contrainte, op non faite)
+        #   - y[i,k]=0                      → x[i,j,k] >= -1 (toujours satisfait)
         for i in range(len(self.instance.jobs_struct)):
             for j in range(len(self.instance.jobs_struct[i])):
                 for k in range(self.instance.nb_workers):
-                    m.addConstr((x[i,j,k] >= y[i,k]), name=f"same_worker_operation_{i}_{j}_{k}")
+                    m.addConstr((x[i,j,k] >= y[i,k] + task_done[i,j] - 1), name=f"same_worker_operation_{i}_{j}_{k}")
 
         # Plus besoin de cette contrainte à present
         # # constraint : if worker start the first task of a job then this worker must do all the tasks for this job
@@ -390,7 +445,7 @@ class Model:
         # just a line of penaly_levels can be > 0, it is the job completed by worker without the level required
 
         # at most one job can be done by workers without the level required but with penalty
-        m.addConstr((gp.quicksum(job_completed_without_level[i] for i in range(self.instance.nb_jobs)) <= 1), name=f"job_completed_without_level")
+        m.addConstr((gp.quicksum(job_completed_without_level[i] for i in range(self.instance.nb_jobs)) <= self.nb_job_with_no_skills), name=f"job_completed_without_level")
 
         # just the line (task) of job selected can be completed, others must be 0 because we want just one job can be done by worker without the level required but with penalty
         for i in range(self.instance.nb_jobs):
@@ -400,7 +455,7 @@ class Model:
         # the difference of level can not be more than 1 if the task is done by a worker without the required level
         for i in range(self.instance.nb_jobs):
             for j in range(len(self.instance.jobs_struct[i])):
-                m.addConstr((penalty_levels[i,j] <= 1), name=f"penalty_levels_positive_{i}_{j}") # the level difference can not be more than 1 if the task is done by a worker without the required level
+                m.addConstr((penalty_levels[i,j] <= LEVEL_DIFFERENCE), name=f"penalty_levels_positive_{i}_{j}") # the level difference can not be more than 1 if the task is done by a worker without the required level
 
     # NE PRENS PAS ENCORE EN COMPTE TACHE SOLO SANS COMPETENCE (A FAIRE)
     def _teaching_effect_constraints(self, m, x, l, delta_lin_trick_teach_effect):
@@ -441,7 +496,6 @@ class Model:
                 m.addConstr((gp.quicksum(delta_lin_trick_teach_effect[k,metier,i] for i in range(N_CONSTR)) == 1), name=f"linearization_learning_effect4_w{k}_metier{metier}")
 
     def _cognitive_load_constraints(self, m, x, z_auxilary, has_level, is_tutor, is_apprenti, is_collab, tab_count_tasks_has_tutor, tab_count_tasks_has_apprenti, cognitive_load_tutors, cognitive_load_apprentis, cognitive_load_collaboration, tab_count_tasks_with_collab, cognitive_load_total, l):
-
         ## TEACHING
         # contrainte pour savoir si un worker k à le niveau de compétence requis pour faire la tache O_ij
         M = LEVEL_MAX
@@ -453,7 +507,7 @@ class Model:
                     m.addConstr((self.instance.levels_workers[k][index_m] + M * (1 - has_level[i,j,k]) >= self.instance.tasks_difficulties[index_j]), name=f"definition_theta_{i}_{j}_{k}") # if worker k has the level required -> tetha_ijsk = 0 or 1, if worker k doesn't have the level required -> tetha_ijsk = 0
                     m.addConstr((self.instance.levels_workers[k][index_m] - M * has_level[i,j,k] <= self.instance.tasks_difficulties[index_j] - EPS), name=f"definition_theta2_{i}_{j}_{k}") # if worker k has the level required -> tetha_ijsk = 1, if worker k doesn't have the level required -> tetha_ijsk = 0 or 1
                 
-
+        print("EPS=", EPS)
         # contrainte pour savoir si k à fait la tache O_ij en tant que TUTEUR
         # linéarisation du ET LOGIQUE
         # is_tutor_ijk = x_ijk AND z_ij1 AND has_level_ijk
@@ -623,62 +677,65 @@ class Model:
         for i in range(self.instance.nb_jobs):
             for j in range(len(self.instance.jobs_struct[i])):
                 for k in range(self.instance.nb_workers):
-                    m.addConstr((z_auxilary[i,j,2] == 1), name=f"all_collaboration_tasks_{i}_{j}_{k}")
+                    m.addConstr((z_auxilary[i,j,0] == 0), name=f"all_collaboration_tasks_{i}_{j}_{k}")
+                    m.addConstr((z_auxilary[i,j,3] == 0), name=f"all_collaboration_tasks_{i}_{j}_{k}")
 
     def _all_solo_tasks(self, m, z_auxilary):
         for i in range(self.instance.nb_jobs):
             for j in range(len(self.instance.jobs_struct[i])):
                 for k in range(self.instance.nb_workers):
-                    m.addConstr((z_auxilary[i,j,0] == 1), name=f"all_solo_tasks_{i}_{j}_{k}")
+                    m.addConstr((z_auxilary[i,j,1] == 0), name=f"all_solo_tasks_{i}_{j}_{k}")
+                    m.addConstr((z_auxilary[i,j,2] == 0), name=f"all_solo_tasks_{i}_{j}_{k}")
+
+    def _not_constrained_makespan():
+        pass
 
 
 ##### FONCTION A BINE REVOIR !!!!!!!!!!!!!! MAJ LE 5 MAI ET PAS TEMINER DONC A TEMRINER
-    def _constrained_makespan(self, m, C_max, limit_makespan, penalty_makespan, penalty_makespan_job, job_done_before_limit, C, job_done):
-        # if makespan is grater than a certain thresold, we consider penalty for the exceeded part
+    def _constrained_makespan(self, m, C_max, limit_makespan, penalty_makespan, penalty_makespan_job, C, job_done):
+        # if makespan is greater than a certain thresold, we consider penalty for the exceeded part
         self.BORNE_SUP_MAKESPAN = limit_makespan
         print("limite MAKESPAN = ", limit_makespan)
-        m.addConstr((C_max <= limit_makespan + penalty_makespan), name=f"constrained_makespan")
-
-        for i in range(self.instance.nb_jobs):
-            m.addConstr((C[i] <= limit_makespan + penalty_makespan_job[i]))
-
-        M = max(self.instance.tasks_times[i][0] for i in range(self.instance.nb_tasks)) * self.instance.max_nb_operations # borne sup du makespan
-        for i in range(self.instance.nb_jobs):
-            m.addConstr((penalty_makespan_job[i] <= (1 - job_done_before_limit[i]) * M))
-            m.addConstr((job_done_before_limit[i] <= job_done[i]))
+        # m.addConstr((C_max <= limit_ makespan + penalty_makespan), name=f"constrained_makespan")
+        m.addConstr((C_max <= limit_makespan), name=f"constrained_makespan")
 
 
-    # NE PRENS PAS ENCORE EN COMPTE TACHE SOLO SANS COMPETENCE (A FAIRE)
-    def _deadline_constraints_operation(self, m, x, d, z_auxilary, in_time, penalty_deadline, C, type="job"):
-        """
-        type : "operation" ou "job" pour savoir si on applique la contrainte sur les opérations ou sur les jobs
-        """
-        ########### Une tache (considérer jobs ou opérations ou sous-opérations) qui commence avant la date limite BORNE_SUP_MAKESPAN doit se terminer avant celle ci
-        ## -> forcer cette contrainte en dure pour le moment mais voir si on peut autoriser mais grande pénalité si on la dépasse pour ne pas rendre le modèle infaisable
-        for i in range(self.instance.nb_jobs):
-            for j in range(len(self.instance.jobs_struct[i])):
-                for k in range(self.instance.nb_workers):
+    def _no_constrained_makespan(self, m, job_done):
+        pass
+
+
+
+    # # NE PRENS PAS ENCORE EN COMPTE TACHE SOLO SANS COMPETENCE (A FAIRE)
+    # def _deadline_constraints_operation(self, m, x, d, z_auxilary, in_time, penalty_deadline, C, type="job"):
+    #     """
+    #     type : "operation" ou "job" pour savoir si on applique la contrainte sur les opérations ou sur les jobs
+    #     """
+    #     ########### Une tache (considérer jobs ou opérations ) qui commence avant la date limite BORNE_SUP_MAKESPAN doit se terminer avant celle ci
+    #     ## -> forcer cette contrainte en dure pour le moment mais voir si on peut autoriser mais grande pénalité si on la dépasse pour ne pas rendre le modèle infaisable
+    #     for i in range(self.instance.nb_jobs):
+    #         for j in range(len(self.instance.jobs_struct[i])):
+    #             for k in range(self.instance.nb_workers):
                     
-                    # in_time[i,j,k] = 1 alors d[i,j,k] <= BORNE_SUP_MAKESPAN, 0 sinon
-                    # Si k ne fait pas la tache O_ijs -> in_time[i,j,k] = 1
-                    m.addConstr((d[i,j,k] >= self.BORNE_SUP_MAKESPAN - M * in_time[i,j,k]), name=f"start_time_before_deadline_{i}_{j}_{k}")
-                    m.addConstr((d[i,j,k] <= self.BORNE_SUP_MAKESPAN + M * (1 - in_time[i,j,k])), name=f"start_time_before_deadline2_{i}_{j}_{k}")
+    #                 # in_time[i,j,k] = 1 alors d[i,j,k] <= BORNE_SUP_MAKESPAN, 0 sinon
+    #                 # Si k ne fait pas la tache O_ijs -> in_time[i,j,k] = 1
+    #                 m.addConstr((d[i,j,k] >= self.BORNE_SUP_MAKESPAN - M * in_time[i,j,k]), name=f"start_time_before_deadline_{i}_{j}_{k}")
+    #                 m.addConstr((d[i,j,k] <= self.BORNE_SUP_MAKESPAN + M * (1 - in_time[i,j,k])), name=f"start_time_before_deadline2_{i}_{j}_{k}")
 
-                    if type == "operation":
-                        index_j = self.instance.jobs_struct[i][j] # A VOIR -> Besoin pour calculer la fin de la tache mais avec variable f_ijk directement quand je l'aurais terminer les contraintes sur cette varibale f_ijk
-                        # si k fait la tache : f_ijsk vrai fin
-                            # si in_time = 1 -> f_ijsk doit se terminer avant OK
-                            # si in_time = 0 -> f_ijsk non contraint par cette coontrainte OK
-                        # si k ne fait pas la tache : f_ijsk = - M <= BORNE_SUP_MAKESPAN donc OK
+    #                 if type == "operation":
+    #                     index_j = self.instance.jobs_struct[i][j] # A VOIR -> Besoin pour calculer la fin de la tache mais avec variable f_ijk directement quand je l'aurais terminer les contraintes sur cette varibale f_ijk
+    #                     # si k fait la tache : f_ijsk vrai fin
+    #                         # si in_time = 1 -> f_ijsk doit se terminer avant OK
+    #                         # si in_time = 0 -> f_ijsk non contraint par cette coontrainte OK
+    #                     # si k ne fait pas la tache : f_ijsk = - M <= BORNE_SUP_MAKESPAN donc OK
 
-                        f_ijsk = d[i,j,k] + self.instance.tasks_times[index_j][0] * z_auxilary[i,j,0] + self.instance.tasks_times[index_j][1] * z_auxilary[i,j,1] + self.instance.tasks_times[index_j][2] * z_auxilary[i,j,2] - M * (1 - x[i,j,k])
-                        m.addConstr((f_ijsk <= self.BORNE_SUP_MAKESPAN + penalty_deadline[i,j] + M * (1 - in_time[i,j,k])), name=f"end_time_before_deadline_{i}_{j}_{k}")
+    #                     f_ijsk = d[i,j,k] + self.instance.tasks_times[index_j][0] * z_auxilary[i,j,0] + self.instance.tasks_times[index_j][1] * z_auxilary[i,j,1] + self.instance.tasks_times[index_j][2] * z_auxilary[i,j,2] - M * (1 - x[i,j,k])
+    #                     m.addConstr((f_ijsk <= self.BORNE_SUP_MAKESPAN + penalty_deadline[i,j] + M * (1 - in_time[i,j,k])), name=f"end_time_before_deadline_{i}_{j}_{k}")
 
-                    if type == "job":
-                        m.addConstr((C[i] <= self.BORNE_SUP_MAKESPAN + gp.quicksum(penalty_deadline[i,j] * in_time[i,j,k] for j in range(len(self.instance.jobs_struct[i])))), name=f"job_completion_before_deadline_{i}_{j}_{k}")
+    #                 if type == "job":
+    #                     m.addConstr((C[i] <= self.BORNE_SUP_MAKESPAN + gp.quicksum(penalty_deadline[i,j] * in_time[i,j,k] for j in range(len(self.instance.jobs_struct[i])))), name=f"job_completion_before_deadline_{i}_{j}_{k}")
 
 
-        self.PENALTY_DEADLINE = True
+    #     self.PENALTY_DEADLINE = True
 
     def _hard_constraints_level_must_be_higher_if_solo(self, m, z_auxilary, ):
         for i in range(self.instance.nb_jobs):
@@ -734,14 +791,14 @@ class Model:
         delta = m.addVars(self.indexes["sequencing"], vtype=GRB.BINARY, name="delta") # delta[i, j, h, g, k] = 1
         
         # WORKER DE BASE POUR UN JOB
-        y = m.addVars(self.instance.nb_jobs, self.instance.nb_workers, vtype=GRB.INTEGER, name="y") # y[i,k]=1 si k est worker de base pour jobe i, 0 sinon 
+        y = m.addVars(self.instance.nb_jobs, self.instance.nb_workers, vtype=GRB.BINARY, name="y") # y[i,k]=1 si k est worker de base pour jobe i, 0 sinon 
          
         # learning AND forgetting effects variables
         l = m.addVars(self.instance.nb_workers, self.instance.nb_professions, vtype=GRB.CONTINUOUS, lb=0, name="l") # l[k,m] = level of worker k before performing metier m after run of the PL
         # forgetting = m.addVars(self.instance.nb_workers, self.instance.nb_professions, lb=0, vtype=GRB.CONTINUOUS, name="forgetting") # forgetting[k,m] = niveau de forgetting pour le worker k et le metier m, utilisé pour modéliser les effets d'oublie
         
         f = m.addVars(self.indexes["assignment"], vtype=GRB.CONTINUOUS, lb=0, name="f") # f[i,j,k] = completion time of operation j of job i if assigned to worker k -- Ajout de cette variable pour prendre en compte le fait que la duré d'une tache peut etre different selon si fait en solo, en apprentissage ou en collab
-        z_auxilary = m.addVars(self.indexes["mode"], vtype=GRB.INTEGER, name="z_auxilary") # z[i,j,0] = 1 if O_ij is done in solo, z[i,j,1] = 1 if O_ij is done in apprentissage
+        z_auxilary = m.addVars(self.indexes["mode"], vtype=GRB.BINARY, name="z_auxilary") # z[i,j,0] = 1 if O_ij is done in solo, z[i,j,1] = 1 if O_ij is done in apprentissage
 
         # Linearisation min pour savoir si une tache est fait en apprentissage ou en collab
         Level_min = m.addVars(self.indexes["operation"], vtype=GRB.CONTINUOUS, lb=0, name="Level_min") #vaut le level min d'un worker sur O_ij
@@ -787,13 +844,13 @@ class Model:
         # KNOW WICH JOBS ARE DONE
         job_done = m.addVars(self.instance.nb_jobs, vtype=GRB.BINARY, name="job_done") # for maximizing the number of jobs done wirh their resale value
         task_done = m.addVars(self.indexes["operation"], vtype=GRB.BINARY, name="task_done") # for know if all the tasks of a job are completed
-        job_done_before_limit = m.addVars(self.instance.nb_jobs, vtype=GRB.BINARY, name="job_done_before_limit") # for maximizing the number of jobs done before the deadline
+        # job_done_before_limit = m.addVars(self.instance.nb_jobs, vtype=GRB.BINARY, name="job_done_before_limit") # for maximizing the number of jobs done before the deadline
 
         # Variable permettant de savoir si une tache à débuter avant la date limite BORNE_SUP_MAKESPAN
         # Pour faire en sorte que cette tache doit se terminer avant la date limite BORNE_SUP_MAKESPAN ou alors si elle dépasse cette date ajouté en pénalité
         in_time = m.addVars(self.indexes["assignment"], vtype=GRB.BINARY, name="in_time") # in_time[i,j,k] = 1 si O_ij commence avant la date limite BORNE_SUP_MAKESPAN
 
-        return x, d, C, C_max, delta, l, f, z_auxilary, Level_min, Delta_min, is_tutor, has_level, cognitive_load_tutors, is_apprenti, cognitive_load_apprentis, is_collab, cognitive_load_collaboration, cognitive_load_total, penalty_makespan, penalty_deadline, in_time, penalty_levels, job_completed_without_level, job_done, task_done, y, delta_lin_trick_teach_effect, penalty_makespan_job, job_done_before_limit #, forgetting
+        return x, d, C, C_max, delta, l, f, z_auxilary, Level_min, Delta_min, is_tutor, has_level, cognitive_load_tutors, is_apprenti, cognitive_load_apprentis, is_collab, cognitive_load_collaboration, cognitive_load_total, penalty_makespan, penalty_deadline, in_time, penalty_levels, job_completed_without_level, job_done, task_done, y, delta_lin_trick_teach_effect, penalty_makespan_job #, forgetting
 
     def _build_helper_variables(self) -> None:
         # Ce ne sont pas des variables de décision du modèle 
@@ -812,13 +869,24 @@ class Model:
         # Variable pour savoir si on a utilisé la pénalité de deadline dans les contraintes
         self.PENALTY_DEADLINE = False 
     
-    def _build_model(self, objective, weight, priority, time_limit=None, constraints_config= None, verbose=False, job_with_no_skills=False, agregation_skills="sum", benefit_in_time=True) -> gp.Model:
+    def _build_model(
+            self,
+            objective,
+            weight,
+            priority,
+            time_limit=None,
+            constraints_config= None,
+            verbose=False,
+            job_with_no_skills=False,
+            agregation_skills="sum",
+            ponderation_task_done="one",
+    ) -> gp.Model:
         """
         Construit le modèle de programmation linéaire
         
         Args:
             objective (int): l'objectif à optimiser, peut être "makespan", "skill", "both" ou "lexicographic" ou "cognitive_load_total"
-            weight (list): les poids à accorder à chaque objectifs (makespan, skill) si objective = "both", n'est pas utilisé sinon
+            weight (dico): les poids à accorder à chaque objectifs (makespan, skill) si objective = "both", n'est pas utilisé sinon
             priority (list): la priorité à accorder à chaque objectif (makespan, skill) si objective = "lexicographic", n'est pas utilisé sinon
             verbose (bool): si True, affiche les informations sur les solutions trouvées par Gurobi
             time_limit (int): la limite de temps pour l'optimisation
@@ -861,8 +929,7 @@ class Model:
             task_done,
             y,
             delta_lin_trick_teach_effect,
-            penalty_makespan_job,
-            job_done_before_limit
+            penalty_makespan_job
             # forgetting
         ) = self._build_variables(m)
 
@@ -884,10 +951,14 @@ class Model:
             if constraints_config.get("job_with_no_skills", False) :
                 # if a worker do not have the level for complete a task, a tutor can teaching him, or he can complete the task alone but with more time and a penalty_levels on the objectif function is appliynig
                 print("job with no skills activated")
+                self.nb_job_with_no_skills = constraints_config["job_with_no_skills"]
+                print("nb_job_with_no_skills = ", self.nb_job_with_no_skills)
                 self._at_least_one_worker_with_level_greater_than_difficulty_of_task_SOFT(m, x, penalty_levels, job_completed_without_level, z_auxilary)
                 self.PENALTY_LEVEL = True
             else :
                 print("job with no skills desactived")
+                self.nb_job_with_no_skills = 0
+                print("nb_job_with_no_skills = ", self.nb_job_with_no_skills)
                 # if a worker do not have level for complete a task, then a worker with re required level must teaching this task to him
                 self._at_least_one_worker_with_level_greater_than_difficulty_of_task(m, x, penalty_levels, z_auxilary, job_completed_without_level)
                 self.PENALTY_LEVEL = False
@@ -896,7 +967,7 @@ class Model:
             if constraints_config.get("no_base_worker", False) :
                 pass
             else :
-                self._worker_of_the_first_operation_must_do_all_operations_of_the_job(m, x, y, job_done)
+                self._worker_of_the_first_operation_must_do_all_operations_of_the_job(m, x, y, job_done, task_done)
 
             if constraints_config.get("fix_value_skills_superior", False) :
                 skills_value = constraints_config["fix_value_skills_superior"]
@@ -924,7 +995,7 @@ class Model:
             
             if constraints_config.get("constrained_makespan", False) :
                 limit_makespan = constraints_config["constrained_makespan"]
-                self._constrained_makespan(m, C_max, limit_makespan, penalty_makespan, penalty_makespan_job, job_done_before_limit, C, job_done)
+                self._constrained_makespan(m, C_max, limit_makespan, penalty_makespan, penalty_makespan_job, C, job_done)
                 print("constrained makespan activated with limit =", limit_makespan)
                 print("constrained makespan activated with self.BORNE_SUP_MAKESPAN =", self.BORNE_SUP_MAKESPAN)
             
@@ -935,10 +1006,10 @@ class Model:
                 self._hard_constraints_level_must_be_higher_if_solo(m, z_auxilary)
 
             # If need to init affectation variables for some values
-            init_vars = constraints_config.get("init_affectaion_variables", False)
+            init_vars = constraints_config.get("init_affectation_variables", False)
             if type(init_vars) is list :
                 print("init affectation variables activated")
-                self._init_affectaion_variables(x, init_vars[0], d, init_vars[1])
+                self.init_affectation_variables(x, init_vars[0], d, init_vars[1], task_done, init_vars[2], z_auxilary, init_vars[3])
             else:
                 print("init affectation variables desactivated")
             # else is bool False and not dict, so do nothing
@@ -949,6 +1020,10 @@ class Model:
             self._at_least_one_worker_with_level_greater_than_difficulty_of_task(m, x, penalty_levels, z_auxilary, job_completed_without_level)
             self.PENALTY_LEVEL = False
         
+        #
+        #Faire fonction pour focntion objectif : _set_objective(...)
+        #
+        #
 ########################################################################
 ########################### OBJECTIVE FUNCTION #########################
 ########################################################################
@@ -957,20 +1032,12 @@ class Model:
 
         m.Params.SolFiles = "../results/intermediate_solutions.sol"
 
-        # if self.PENALTY_DEADLINE:
-        #     penalty_deadline_obj = gp.quicksum(penalty_deadline[i,j] for i in range(self.instance.nb_jobs) for j in range(len(self.instance.jobs_struct[i])))
-        # else:
-        #     penalty_deadline_obj = 0
 
-        # print("penalty deadline obj:", penalty_deadline_obj)
 
-        # cognitive_load_tutors_obj = gp.quicksum(cognitive_load_tutors[k, metier] for k in range(self.instance.nb_workers) for metier in range(self.instance.nb_professions))
-        # cognitive_load_collab_obj = gp.quicksum(cognitive_load_collaboration[k, metier] for k in range(self.instance.nb_workers) for metier in range(self.instance.nb_professions))
+        ###==================================== ==================================== ====================================
+        ###====================================   DIFFERENT MODE D'OPTIM LE SKILLS   ====================================
+        ###==================================== ==================================== ====================================
         
-
-
-
-        ### DIFFERENT MODE D'OPTIM LE SKILLS
         if agregation_skills == "sum":
             skill_obj = gp.quicksum(l[k,metier] for k in range(self.instance.nb_workers) for metier in range(self.instance.nb_professions)) - gp.quicksum(self.instance.levels_workers[k][metier] for k in range(self.instance.nb_workers) for metier in range(self.instance.nb_professions))
         
@@ -983,134 +1050,49 @@ class Model:
 
 
         cognitive_load_total_obj = gp.quicksum(cognitive_load_total[k, metier] for k in range(self.instance.nb_workers) for metier in range(self.instance.nb_professions))
-        # skill_obj = gp.quicksum(l[k,metier] for k in range(self.instance.nb_workers) for metier in range(self.instance.nb_professions)) - gp.quicksum(self.instance.levels_workers[k][metier] for k in range(self.instance.nb_workers) for metier in range(self.instance.nb_professions)) 
 
-        # cognitive_load_total_obj += penalty_deadline_obj
-        # skill_obj -= penalty_deadline_obj
-        penalty_levels_obj = gp.quicksum(penalty_levels[i,j] for i in range(self.instance.nb_jobs) for j in range(len(self.instance.jobs_struct[i])))
+        # Job complété
+        job_done_benefit = gp.quicksum(self.instance.resale_price_jobs[i] * job_done[i] for i in range(self.instance.nb_jobs))        
 
-        # OBJECTIVES 
-        # benefit_obj = gp.quicksum(self.instance.resale_price_jobs[i] * job_done[i] for i in range(self.instance.nb_jobs))
-        # benefit_obj = gp.quicksum(self.instance.resale_price_jobs[i] * job_done[i] for i in range(self.instance.nb_jobs)) - penalty_levels_obj - penalty_makespan
-        
-
-        # Pénalité pour les jobs qui dépassent la durée limite
-        penalty_makespan_job_OBJ = gp.quicksum(penalty_makespan_job[i] for i in range(self.instance.nb_jobs))
-
-        # Job qui finissent à temps
-        benefit_obj_in_time = gp.quicksum(self.instance.resale_price_jobs[i] * job_done_before_limit[i] for i in range(self.instance.nb_jobs)) 
-
-        # Job qui finissent peu importe le temps qu'ils prennent
-        benefit_obj = gp.quicksum(self.instance.resale_price_jobs[i] * job_done[i] for i in range(self.instance.nb_jobs))
-        
-        if benefit_in_time :
-            obj_benefit = benefit_obj_in_time - penalty_levels_obj - penalty_makespan_job_OBJ - penalty_makespan*100
-        else :
-            obj_benefit = benefit_obj_in_time + benefit_obj - penalty_levels_obj - penalty_makespan_job_OBJ
-
-
-        # if benefit_in_time:
-        #     benefit_obj_in_time = gp.quicksum(self.instance.resale_price_jobs[i] * job_done_before_limit[i] for i in range(self.instance.nb_jobs))
-            
-            
-        #     # + penalty_makespan pour l'annuler car si on considère les job finit à temps 
-        #     # on uutilise uniquement la pénalité de chaque job au temp limite et pas une pénalité au dernier jobs terminé
-        #     # mettre - penalty_makespan_job_OBJ peut paraitre problématique si le prix de revenu d'un job est inférieur à la penalité
-        #     # il peut ne pas etre fait du tout alors que l'on souhaite qu'il soit quand même fait pour le bénéfice qu'il apporte même si il dépasse la date limite
-        #     benefit_obj = (benefit_obj + penalty_makespan) + benefit_obj_in_time - penalty_makespan_job_OBJ
-
-            
-
-
-        # if objective == "makespan":
-        #     m.setObjectiveN(penalty_levels_obj, index=0, priority=2, name="penalty_levels_obj")
-        #     m.setObjectiveN(C_max, index=1, priority=1, name="makespan_obj")
-        #     m.modelSense = GRB.MINIMIZE
-
-        #     # m.setObjective(C_max + penalty_levels_obj * 10000, GRB.MINIMIZE)
-        #     # m.setObjective(penalty_makespan + penalty_deadline_obj, GRB.MINIMIZE) # in minimizing the penalty for the tasks that exceed the current period, we minimize the makespan
-        
-        # ===============================================
-        # ============== BENEFIT OBJECTIVE ==============
-        # ===============================================
-
-        if objective == "benefit" :
-            if self.PENALTY_LEVEL:
-                # print("self.penalty=", self.PENALTY_LEVEL)
-                penalty_levels_obj = gp.quicksum(penalty_levels[i,j] for i in range(self.instance.nb_jobs) for j in range(len(self.instance.jobs_struct[i])))
-            else:
-                penalty_levels_obj = 0
-            # m.setObjectiveN(benefit_obj - penalty_levels_obj, index=0, priority=1, name="benefit_obj")
-            # m.setObjectiveN(- penalty_makespan, index=1, priority=0, name="penalty_levels_obj")
-            # m.modelSense = GRB.MAXIMIZE
-            m.setObjective(obj_benefit, GRB.MAXIMIZE)
-
-        # ===============================================
-        # =========== MENTAL LOAD OBJECTIVE =============
-        # ===============================================
-
-        elif objective == "cognitive_load_total":
-            m.setObjective(cognitive_load_total_obj + penalty_levels_obj *1000, GRB.MINIMIZE)
-
-
-        # ===============================================
-        # ============== SKILLS OBJECTIVE ===============
-        # ===============================================
-
-        # lorsque l'on optimise le skill, une fois optimisé on cherche à minimiser le makespan pour ne pas avoir de soultions abbérantes
-        elif objective == "skill": 
-            m.setObjectiveN(penalty_levels_obj, index=0, priority=2, name="penalty_levels_obj")
-            m.setObjectiveN(- skill_obj, index=1, priority=1, name="maximize_skill_levels")
-            m.setObjectiveN(C_max, index=2, priority=0, name="minimize_makespan")
-            m.modelSense = GRB.MINIMIZE
-
+        # task complété pondéré par difficulté de la tache 
+        if ponderation_task_done == "difficulty":
+            task_done_benefit = gp.quicksum(self.instance.get_difficulty_and_metier_of_task(i, j)[0] * task_done[i,j] for i in range(self.instance.nb_jobs) for j in range(len(self.instance.jobs_struct[i])))
+        elif ponderation_task_done == "one":
+            task_done_benefit = gp.quicksum(task_done[i,j] for i in range(self.instance.nb_jobs) for j in range(len(self.instance.jobs_struct[i])))
+        else:
+            raise ValueError("ponderation_task_done doit être 'difficulty' ou 'one'")
+    
+        obj_benefit = job_done_benefit + task_done_benefit
 
         # ===============================================
         # =========== LEXICOGRAPHIC OBJECTIVE ===========
         # ===============================================
 
-        # en priorité minimiser la difference entre le niveau du worker et les difficultés des taches qu'il fait seul : penalty_levels_obj
-        elif objective == "lexicographic":
-            if self.PENALTY_LEVEL:
-                m.setObjectiveN(penalty_levels_obj, index=3, priority=3, name="penalty_levels_obj")
-            # je considere le fait qu'une tache doit etre assigné a un worker qui a la niveau
-            # m.setObjectiveN(penalty_levels_obj, index=0, priority=4, name="penalty_levels_obj")
-            # m.setObjectiveN(- penalty_makespan, index=0, priority=3, name="penalty_makespan")
+        if objective == "lexicographic": # valeur élevé implique priorité élevé
             m.setObjectiveN(obj_benefit , index=0, priority=priority[0], name="maximimize_benefit_obj")
             m.setObjectiveN(skill_obj, index=1, priority=priority[1], name="maximize_skill_levels_obj")
             m.setObjectiveN(-cognitive_load_total_obj, index=2, priority=priority[2], name="maximize_minus_cognitive_load_total_obj")
             m.modelSense = GRB.MAXIMIZE
 
         elif objective == "three":
-            res = obj_benefit*weight[0] + skill_obj*weight[1] - cognitive_load_total_obj*weight[2]
+            res = obj_benefit*weight["profit"] + skill_obj*weight["skills"] - cognitive_load_total_obj*weight["cognitive_load"] 
             m.setObjective(res, GRB.MAXIMIZE)
-
-
 
         else:
             raise ValueError("objective doit être 'makespan', 'skill', 'three', 'lexicographic' ou 'cognitive_load_tutors'")
         
-
-
-
-        # sum_Ci_obj = gp.quicksum(C[i] for i in range(self.instance.nb_jobs))
-
-        # # minimsier somme des complétudes des jobs
-        # m.setObjective(sum_Ci_obj, GRB.MINIMIZE)
-
-        # # double objectif : minimiser le makespan et maximiser le niveau de compétence des travailleurs
-        # m.setObjective(0.5 * C_max - 0.5 * skill_obj, GRB.MINIMIZE)
-
         m.write(f"../results/model_{objective}.lp")
         return m
+    
 
-    def solve(self, objective="makespan" , weight=[0,0,0], priority=[0,1,2], time_limit=None, constraints_config=None, verbose=False, job_with_no_skills=False, agregation_skills="sum", benefit_in_time=True) -> Solution:
+
+    def solve(self, objective="benefit" , weight={"profit": 0, "skills": 0, "cognitive_load": 0}, priority=[0,1,2], time_limit=None, constraints_config=None, verbose=False, job_with_no_skills=False, agregation_skills="sum") -> Solution:
         """
         Résout le modèle et affiche les résultats
         
         Args:
             objective (str): l'objectif à optimiser, peut être "makespan", "skill", "both" ou "lexicographic"
-            weight (list): les poids à accorder à chaque objectifs (makespan, skill, cognitive_load_total) si objective = "both", n'est pas utilisé sinon
+            weight (dict): les poids à accorder à chaque objectifs (profit, skill, cognitive_load) si objective = "three", n'est pas utilisé sinon
             priority (list): la priorité à accorder à chaque objectif (makespan, skill, cognitive_load_total) si objective = "lexicographic", n'est pas utilisé sinon
             time_limit (int): la limite de temps pour l'optimisation
             constraints_config (dict): la configuration des contraintes à ajouter au modèle, par exemple {"no_teaching_tasks": True, "constrained_makespan": True, ...}
@@ -1119,10 +1101,10 @@ class Model:
         Returns:
             (Solution): une instance de la classe Solution contenant les résultats de la résolution du modèle
         """
-        
+
         
         assert objective in ["makespan", "skill", "three", "lexicographic", "cognitive_load_total", "benefit"], "objective doit être 'makespan', 'skill', 'three', 'lexicographic', 'cognitive_load_total' ou 'benefit'"
-        assert len(weight) == 3, "weight doit être une liste de trois éléments"
+        assert len(weight) == 3, "weight doit être un dictionnaire de trois éléments"
         assert len(priority) == 3, "priority doit être une liste de trois éléments"
         
         print("\n ========== SOLVING MODEL ========== ")
@@ -1134,8 +1116,7 @@ class Model:
             constraints_config, 
             verbose, 
             job_with_no_skills, 
-            agregation_skills=agregation_skills, 
-            benefit_in_time=benefit_in_time
+            agregation_skills=agregation_skills
         )
 
         if verbose == False:
@@ -1146,7 +1127,11 @@ class Model:
             print("Optimal solution found with objective value:", m.objVal)
             m.write("../results/solution.sol")
             self.write_objectives_values(m, m.NumObj, "../results/objectives_values.txt")
-
+        
+        elif m.status == GRB.INF_OR_UNBD:
+            print("Model is infeasible. Status code:", m.status)
+            m.computeIIS()
+            m.write("../results/model_iis.ilp")
             
         else:
             print("No optimal solution found. Status code:", m.status)
@@ -1210,7 +1195,7 @@ class Model:
             res.append((name, value))
 
         print('et la ->', self.BORNE_SUP_MAKESPAN)
-        res.append(("BORNE_SUP_MAKESPAN", self.BORNE_SUP_MAKESPAN))
+        res.append(("BORNE_SUP_MAKESPAN", self.BORNE_SUP_MAKESPAN)) if self.BORNE_SUP_MAKESPAN is not None else res.append(("BORNE_SUP_MAKESPAN", -1))
         
         if verbose :
             print("objective value:", m.objVal)
@@ -1220,29 +1205,34 @@ class Model:
         s.from_milp_var_list(res)
         return s    
 
-    def _init_affectaion_variables(self, x, x_init, d, d_init):
+    def init_affectation_variables(self, x, x_init, d, d_init, task_done, task_done_init, z, z_init):
         """ Depart des valeurs de la variable x pour la resolution aux valeurs de x_initial """
         for i in range(self.instance.nb_jobs):
             for j in range(len(self.instance.jobs_struct[i])):
                 for k in range(self.instance.nb_workers):
                     x[i,j,k].start = x_init[i,j,k]
                     d[i,j,k].start = d_init[i,j,k]
+                task_done[i,j].start = task_done_init[i,j]
+                for m in range(4):
+                    z[i,j,m].start = z_init[i,j,m]
+
+
 
         print("$*$*$*$*$*$ initial affectation variables set to x_initial $*$*$*$*$*$")
 
-
-    def epsilon_contraintes(self, constraints_config=None, verbose=False, benefit_in_time=False):
+"""
+    def epsilon_contraintes(self, constraints_config=None, verbose=False):
 
         # résolution lexicogrpahique 
         solution_list = [] # liste des solutions obtenues pour chaque ordre d'optimisation lexicographique
-        solution_list.append(self.solve(objective="lexicographic", constraints_config=constraints_config, priority=[2, 1, 0], verbose=verbose, benefit_in_time=benefit_in_time))
-        solution_list.append(self.solve(objective="lexicographic", constraints_config=constraints_config, priority=[2, 0, 1], verbose=verbose, benefit_in_time=benefit_in_time))
+        solution_list.append(self.solve(objective="lexicographic", constraints_config=constraints_config, priority=[2, 1, 0], verbose=verbose))
+        solution_list.append(self.solve(objective="lexicographic", constraints_config=constraints_config, priority=[2, 0, 1], verbose=verbose))
 
-        solution_list.append(self.solve(objective="lexicographic", constraints_config=constraints_config, priority=[1, 2, 0], verbose=verbose, benefit_in_time=benefit_in_time))
-        solution_list.append(self.solve(objective="lexicographic", constraints_config=constraints_config, priority=[0, 2, 1], verbose=verbose, benefit_in_time=benefit_in_time))
+        solution_list.append(self.solve(objective="lexicographic", constraints_config=constraints_config, priority=[1, 2, 0], verbose=verbose))
+        solution_list.append(self.solve(objective="lexicographic", constraints_config=constraints_config, priority=[0, 2, 1], verbose=verbose))
 
-        solution_list.append(self.solve(objective="lexicographic", constraints_config=constraints_config, priority=[0, 1, 2], verbose=verbose, benefit_in_time=benefit_in_time))
-        solution_list.append(self.solve(objective="lexicographic", constraints_config=constraints_config, priority=[1, 0, 2], verbose=verbose, benefit_in_time=benefit_in_time))
+        solution_list.append(self.solve(objective="lexicographic", constraints_config=constraints_config, priority=[0, 1, 2], verbose=verbose))
+        solution_list.append(self.solve(objective="lexicographic", constraints_config=constraints_config, priority=[1, 0, 2], verbose=verbose))
 
 
 
@@ -1293,7 +1283,7 @@ class Model:
                 # s = self.solve(objective="lexicographic", priority=[2, 1, 0], constraints_config=constraints_config_epsilon, verbose=verbose)
                 
                 # utilisé cette objectif plutot
-                s = self.solve(objective="benefit", priority=[2, 1, 0], constraints_config=constraints_config_epsilon, verbose=verbose, benefit_in_time=benefit_in_time)
+                s = self.solve(objective="benefit", priority=[2, 1, 0], constraints_config=constraints_config_epsilon, verbose=verbose)
                 print("Maj : benefit objective")
 
                 if s is not None:
@@ -1337,35 +1327,92 @@ class Model:
            
         return x, solution_list
 
+"""
 
 if __name__ == "__main__":
     
-    # res = read_file("../data/data_temp.test")
-    # res = read_file("../data/data_temp.test")
-    res = read_file("../data/data_resale_price_1.test")
-    
-    instance = Instance()
-    instance.from_dictionary(res)
-    # instance.from_random(at_least_a_worker_have_competence_for_each_profession=False, seed=42)
-    instance.qualified_workers_for_task(verbose=True)
 
+    # #======== Instance Creation ========
+    # res = read_file("../data/data_resale_price_hand_solving_2.test")
+    # instance = Instance()
+    # instance.from_dictionary(res)
+    # print(instance)
+    # instance.qualified_workers_for_task(verbose=True)
+
+############################
+############################
+
+    time_type_of_jobs = {
+        "small": (3, 9),
+        "medium": (9, 18),
+        "long": (18, 42)
+    }
+
+    # seed = np.random.randint(1, 1000) # pour générer un nombre aléatoire entre 1 et 1000 (inclus)
+    seed = 135
+    print(f"seed : {seed}")
+    config_instance = {
+        "seed": seed,
+
+        "nb_jobs": 3,
+        "nb_workers": 3,
+        "nb_professions": 1,
+        "proportion_tasks_per_profession": [1], # [profession 1, profession 2]
+        "max_nb_operations": 5,
+        "nb_tasks" : "lower", # "lower", "medium", "high"
+
+        # "proportion_jobs": [0.3, 0.4, 0.3], # [small_jobs, medium_jobs, long_jobs]
+
+        "proportion_tasks_without_collaborative_work": 0.2,
+        "proportion_tasks_level_required": 0.1,
+
+        "proportion_tasks_times" : [0.3, 0.4, 0.3], # [small_tasks (30 unités), medium_tasks (), long_tasks]
+        "time_type_of_jobs" : time_type_of_jobs,
+        "proportion_tasks_levels":[ 0.1, 0.3, 0.5, 0.1], # [level 1, level 2, level 3, level 4]
+
+        "proportion_workers_levels":[ 0.2, 0.5, 0.2, 0.1], # [level 1, level 2, level 3, level 4]
+
+        "at_least_a_worker_have_competence_for_each_profession": False
+    }
+    instance = Instance()
+    instance.from_config(config_instance)
+    instance.tasks_times = np.array(instance.tasks_times, dtype=int)
     print(instance)
+    # visualization_before_scheduling(instance, not_qualified=True)
+
+    TIME_LIMIT_MAKESPAN = instance.sum_of_job_alone() / 2
+    print("temps total laissé pour le scheduling :", TIME_LIMIT_MAKESPAN)
+    print("temps total nécessaire pour faire tous les jobs en travaillant seul :", instance.sum_of_job_alone())
+
+    
+    #======== Model Creation ========
     model = Model(instance)
     
-    # # # s = model.solve(objective="lexicographic", weight=[0.5, 0.5, 0.5], priority=[2, 1, 0], verbose=True)
-    # # s = model.solve(objective="makespan", weight=[0.5, 0.5, 0.5], priority=[2, 1, 0], verbose=True)
-
+    # TIME_LIMIT_MAKESPAN = instance.sum_of_job_alone()#/ 2
     constraints_config = {}
-    # constraints_config = {"job_with_no_skills": False,
-    #                       "no_teaching_tasks": True
-    #                       }
-    s = model.solve(objective="benefit", weight=[0, 0, 0], priority=[2, 1, 0], constraints_config=constraints_config, verbose=True)
+    constraints_config = {"job_with_no_skills": True,
+                        "constrained_makespan": TIME_LIMIT_MAKESPAN,
+                        "no_base_worker" : False,
+                        "no_solo_tasks": False,
+                 }
+
+    #======== Dico de pondération des objectifs (Aggrégation) ========
+    weights = {
+    "profit" : 1,
+    "skills" : 0,
+    "cognitive_load" : 0
+    }
+
+
+
+    s = model.solve(objective="three", weight=weights, priority=[2, 1, 0], constraints_config=constraints_config, verbose=True )
     # resume_levels_workers(s, instance)
-    # # print(s)
+    print(s)
 
-    instance.qualified_workers_for_task(verbose=True)
 
-    df = gantt_chart(s, instance, color=3, verbose=True, separate_little=True)
+    #======== Solution Visualization ========
+    df = scheduling_to_df(s, instance)
+    gantt_chart(df, color=0, separate_little=True)
     print(df)
 
     res = check_df(df)
@@ -1374,28 +1421,7 @@ if __name__ == "__main__":
     res = s.all_jobs_completed()
     print("all jobs completed:", res)
 
-    res = s.wich_jobs_are_completed()
+    res = s.which_jobs_are_completed()
     print("completed jobs:", res)
 
-    instance.qualified_workers_for_task(verbose=True)
-
-    # # # plot_levels_workers(s, instance, verbose=True)
-
-
-
-    # instance_generated = Instance()
-    # instance_generated.from_random(seed=42)
-    # print(instance_generated)
-    # # res = read_file("../data/data_temp_2.test")
-    # # instance_generated = Instance()
-    # # instance_generated.from_dictionary(res)
-    # # print(instance_generated)
-
-    # # soft constraint on the level for solo tasks : it can be lower but with a penalty in the objective function
-    # model_soft = Model(instance_generated)
-    # s_soft = model_soft.solve(objective="makespan", weight=[0.5, 0.5, 0.5], priority=[2, 1, 0], verbose=True)
-    # gantt_chart(s_soft, instance_generated, color=3, verbose=True)
-
-    # # # hard constraint of level must be higher if solo task
-    # # model_hard = Model(instance_generated)
-    # # s_hard = model_hard.solve(objective="makespan", constraints_config={"hard_constraints_level_must_be_higher_if_solo": True}, verbose=True)
+     
