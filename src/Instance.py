@@ -1,6 +1,12 @@
 import numpy as np
 from Constante import *
 
+import matplotlib.pyplot as plt
+from matplotlib.colors import LinearSegmentedColormap
+
+from matplotlib.colors import TwoSlopeNorm, LinearSegmentedColormap
+
+
 
 class Instance:
     def __init__(self):
@@ -120,6 +126,105 @@ class Instance:
                     worker_to_change = np.random.randint(0, self.nb_workers)
                     self.levels_workers[worker_to_change, metier] = max_difficulty_per_profession[metier]
 
+
+    def from_scenario(self, nb_jobs=6, nb_workers=5, nb_professions=3,
+                      nb_tasks_per_profession=3, max_nb_operations=4,
+                      worker_profile="balanced", schedule_tightness=0.8, seed=42):
+        """
+        Génère une instance réaliste et contrôlable via des paramètres métier.
+
+        Args:
+            nb_jobs            : nombre de jobs à ordonnancer
+            nb_workers         : nombre de workers disponibles
+            nb_professions     : nombre de métiers distincts
+            max_nb_operations  : nombre max d'opérations par job
+            worker_profile     : distribution des niveaux workers
+                                 "junior"   → peu qualifiés, beaucoup de teaching possible
+                                 "balanced" → mélange qualifiés / apprentis
+                                 "senior"   → majoritairement qualifiés
+            nb_tasks_per_profession : nombre de tâches par métier, chacune avec une
+                                     difficulté tirée aléatoirement entre 1 et LEVEL_MAX
+            schedule_tightness : ratio fenêtre de temps / temps total en solo
+                                 < 1 → impossible de tout finir (sélection forcée)
+                                 1.0 → juste le temps en solo pur
+                                 > 1 → confortable
+            seed               : pour la reproductibilité
+        """
+        np.random.seed(seed)
+
+        self.nb_jobs         = nb_jobs
+        self.nb_workers      = nb_workers
+        self.nb_professions  = nb_professions
+        self.max_nb_operations = max_nb_operations
+
+        # ── 1. TÂCHES ───────────────────────────────────────────────────────
+        self.nb_task_in_profession = np.full(nb_professions, nb_tasks_per_profession)
+        self.nb_tasks = nb_professions * nb_tasks_per_profession
+
+        # tâche t appartient au métier t // nb_tasks_per_profession
+        self.task_to_m = {t: t // nb_tasks_per_profession for t in range(self.nb_tasks)}
+
+        # difficultés aléatoires entre 1 et LEVEL_MAX pour chaque tâche
+        self.tasks_difficulties = np.random.randint(LEVEL_MIN, LEVEL_MAX, size=self.nb_tasks).astype(float)
+
+        # temps solo proportionnel à la difficulté, teaching plus long, collab plus court
+        solo_times     = self.tasks_difficulties * np.random.uniform(2.0, 4.0, size=self.nb_tasks)
+        teaching_times = solo_times * np.random.uniform(1.3, 1.8, size=self.nb_tasks)
+        collab_times   = solo_times * np.random.uniform(0.5, 0.75, size=self.nb_tasks)
+
+        # 20% des tâches impossibles en collaboration (ex : diagnostic individuel)
+        collab_times[np.random.rand(self.nb_tasks) < 0.2] = -1
+
+        self.tasks_times = np.stack([solo_times, teaching_times, collab_times], axis=1)
+
+        # ── 2. WORKERS ──────────────────────────────────────────────────────
+        # Chaque worker a 1 métier "principal" (niveau élevé) et les autres au niveau de base.
+        # Le métier principal tourne sur les workers : w0 → m0, w1 → m1, etc.
+        base_level    = {"junior": 1, "balanced": 2, "senior": 3}[worker_profile]
+        primary_level = {"junior": 2, "balanced": 3, "senior": 4}[worker_profile]
+
+        self.levels_workers = np.full((nb_workers, nb_professions), float(base_level))
+        for k in range(nb_workers):
+            self.levels_workers[k, k % nb_professions] = float(primary_level)
+
+        # garantir qu'au moins un worker est qualifié pour la tâche la plus dure de chaque métier
+        # (difficulté max = 3) pour que l'instance soit toujours faisable
+        for m in range(nb_professions):
+            if np.max(self.levels_workers[:, m]) < 3:
+                self.levels_workers[np.random.randint(nb_workers), m] = 3.0
+
+        # ── 3. JOBS ─────────────────────────────────────────────────────────
+        # Chaque job traverse des métiers différents (sans répétition de métier)
+        # Réaliste : un produit passe par différentes étapes de réparation
+        self.jobs_struct = []
+        for i in range(nb_jobs):
+            nb_ops = np.random.randint(2, max_nb_operations + 1)
+            nb_ops = min(nb_ops, nb_professions)  # au plus 1 tâche par métier
+            chosen_professions = np.random.choice(nb_professions, size=nb_ops, replace=False)
+            # pour chaque métier choisi, prendre une tâche au hasard parmi ses 3
+            ops = np.array([
+                m * nb_tasks_per_profession + np.random.randint(nb_tasks_per_profession)
+                for m in chosen_professions
+            ])
+            self.jobs_struct.append(ops)
+
+        self.difficulty_jobs   = np.array([max(self.tasks_difficulties[ops]) for ops in self.jobs_struct])
+        self.resale_price_jobs = self.difficulty_jobs * np.random.uniform(10, 30, size=nb_jobs)
+
+        # ── 4. PRÉCÉDENCE ───────────────────────────────────────────────────
+        # Contrainte chaîne simple : op j doit être faite avant op j+1
+        self.constraints_precedence_operations = np.zeros(
+            (nb_jobs, max_nb_operations, max_nb_operations)
+        )
+        for i in range(nb_jobs):
+            for j in range(len(self.jobs_struct[i]) - 1):
+                self.constraints_precedence_operations[i, j, j + 1] = 1
+
+        # ── 5. FENÊTRE DE TEMPS ─────────────────────────────────────────────
+        # Calculée à partir des temps réels de l'instance pour rester cohérente.
+        # schedule_tightness = 0.8 → 80% du temps nécessaire pour tout faire en solo
+        total_solo = self.sum_of_job_alone()
+        self.time_window = round(total_solo * schedule_tightness)
 
     def from_config(self, config) -> None:
             
@@ -448,6 +553,270 @@ class Instance:
             res.append(time_job)
         return res
             
+    def sum_profit_of_jobs(self, verbose=False):
+        res = 0
+        for i in range(len(self.jobs_struct)):
+            res += self.resale_price_jobs[i]
+            if verbose == True:
+                print(f"Profit of job {i+1}: {self.resale_price_jobs[i]:.2f}") 
+        if verbose == True:
+            print(f"Total profit of jobs: {res:.2f}") 
+        return res
+
+    def view_difficulty_and_metier_of_each_task(self, verbose=False):
+        res = []
+        for i in range(len(self.jobs_struct)):
+            res.append([])
+            for j in range(len(self.jobs_struct[i])):
+                index_task = self.jobs_struct[i][j]
+                level_task = self.tasks_difficulties[index_task] # niveau de diificulté de la tache 
+                m = self.task_to_m[index_task]
+                res[i].append((level_task, m))
+                if verbose == True:
+                    print(f"Task ({i+1},{j+1}) - index {index_task} - level {level_task} - metier {m}")
+        return res            
+
+    # GENERE
+    def vizualize_levels_workers(self):
+
+        M = self.levels_workers  # matrice nb_workers × nb_metiers
+
+        # Palette continue : rouge -> orange -> jaune -> vert
+        cmap = LinearSegmentedColormap.from_list(
+            "red_to_green",
+            ["red", "orange", "yellow", "green"]
+        )
+
+        plt.figure(figsize=(12, 6))
+
+
+        plt.imshow(M, cmap=cmap, vmin=1, vmax=4, aspect="auto", interpolation="nearest")
+
+        cbar = plt.colorbar()
+        cbar.set_label("Niveau")
+        cbar.set_ticks([1, 2, 3, 4])
+
+        plt.xlabel("Métiers")
+        plt.ylabel("Workers")
+        plt.title("Matrice workers × métiers")
+
+        plt.xticks(
+            range(M.shape[1]),
+            [f"Métier {j}" for j in range(M.shape[1])],
+            rotation=45
+        )
+
+        plt.yticks(
+            range(M.shape[0]),
+            [f"W{i}" for i in range(M.shape[0])]
+        )
+
+        for i in range(M.shape[0]):
+            for j in range(M.shape[1]):
+                plt.text(j, i, f"{M[i, j]:.1f}", ha="center", va="center", color="black")
+
+        plt.tight_layout()
+        plt.show()
+
+
+
+
+    # GENERE
+    def vizualize_differences_levels_workers_job_i(self, job_index):
+        operations = self.jobs_struct[job_index]
+        nb_operations = len(operations)
+
+        res = np.zeros((self.nb_workers, nb_operations))
+
+        x_labels = []
+
+        for j in range(nb_operations):
+            index_task = operations[j]
+
+            level_task = self.tasks_difficulties[index_task]
+            m = self.task_to_m[index_task]
+
+            res[:, j] = self.levels_workers[:, m] - level_task
+
+            # Label affiché sur l'axe X
+            # x_labels.append(f"Op {index_task}\nM {m}")
+            x_labels.append(f"Métier {m}\nLevel {level_task}")
+
+        # Palette continue rouge -> jaune -> vert
+        cmap = LinearSegmentedColormap.from_list(
+            "diff_red_yellow_green",
+            ["red", "yellow", "green"]
+        )
+
+        # Centre la couleur jaune autour de 0
+        max_abs = np.max(np.abs(res))
+
+        norm = TwoSlopeNorm(
+            vmin=-max_abs,
+            vcenter=0,
+            vmax=max_abs
+        )
+
+        plt.figure(figsize=(max(10, nb_operations * 1.2), max(6, self.nb_workers * 0.4)))
+
+        plt.imshow(
+            res,
+            cmap=cmap,
+            norm=norm,
+            aspect="auto",
+            interpolation="nearest"
+        )
+
+        cbar = plt.colorbar()
+        cbar.set_label("Niveau worker - difficulté opération")
+
+        plt.xlabel("Opérations du job avec métier associé")
+        plt.ylabel("Workers")
+        plt.title(f"Différence de niveau workers / opérations - Job {job_index}")
+
+        plt.xticks(
+            range(nb_operations),
+            x_labels,
+            rotation=45,
+            ha="right"
+        )
+
+        plt.yticks(
+            range(self.nb_workers),
+            [f"W{i}" for i in range(self.nb_workers)]
+        )
+
+        # Affichage des valeurs avec 1 chiffre après la virgule
+        for i in range(self.nb_workers):
+            for j in range(nb_operations):
+                plt.text(
+                    j,
+                    i,
+                    f"{res[i, j]:.1f}",
+                    ha="center",
+                    va="center",
+                    color="black"
+                )
+
+        plt.tight_layout()
+        plt.show()
+
+        return res
+
+    def visualize_jobs_overview(self, render="html", save_path=None):
+        """
+        Tableau Plotly interactif : 1 bloc de 5 lignes par job, 1 colonne par opération.
+        Bandes de couleur par type d'info :
+          Bleu   — métier + difficulté
+          Gris   — temps solo / apprentissage / collab
+          Vert   — workers qualifiés   (Lv >= Df)
+          Orange — workers apprentis   (Lv == Df-1)
+          Rouge  — workers non qualifiés (Lv < Df-1)
+
+        Args:
+            render    : "html" | "interactif" | "notebook"
+            save_path : chemin HTML optionnel
+        """
+        import plotly.graph_objects as go
+
+        res_qualified, res_at_most_one = self.qualified_workers_for_task()
+        max_ops     = max(len(self.jobs_struct[i]) for i in range(self.nb_jobs))
+        all_workers = set(range(1, self.nb_workers + 1))
+
+        BAND_COLORS  = ["#D6EAF8", "#F4F6F7", "#D5F5E3", "#FDEBD0", "#FADBD8"]
+        JOB_COLORS   = ["#EBF5FB", "#F2F3F4"]   # alternance par job
+
+        def _fmt(lst):
+            return '  '.join(f'w{k}' for k in lst) if lst else '–'
+
+        n_rows   = self.nb_jobs * 5
+        col_job  = [""] * n_rows
+        col_vals = [[""] * n_rows for _ in range(max_ops)]
+        col_fill = [["white"] * n_rows for _ in range(max_ops + 1)]
+
+        for i in range(self.nb_jobs):
+            base      = i * 5
+            job_color = JOB_COLORS[i % 2]
+
+            col_job[base] = f"<b>J{i+1}</b>"
+            for band in range(5):
+                col_fill[0][base + band] = job_color
+
+            for j in range(max_ops):
+                if j >= len(self.jobs_struct[i]):
+                    for band in range(5):
+                        col_fill[j + 1][base + band] = "#FDFEFE"
+                    continue
+
+                index_task  = self.jobs_struct[i][j]
+                level_task  = int(self.tasks_difficulties[index_task])
+                m           = int(self.task_to_m[index_task])
+                t_solo      = self.tasks_times[index_task][0]
+                t_app       = self.tasks_times[index_task][1]
+                t_co        = self.tasks_times[index_task][2]
+                t_co_str    = f"{t_co:.1f}" if t_co >= 0 else "N/A"
+
+                qualified   = res_qualified[i][j]
+                apprenti    = res_at_most_one[i][j]
+                unqualified = sorted(all_workers - set(qualified) - set(apprenti))
+
+                texts = [
+                    f"<b>m{m+1}  |  Df={level_task}</b>",
+                    f"A:{t_solo:.1f}   L:{t_app:.1f}   C:{t_co_str}",
+                    f"✓  {_fmt(qualified)}",
+                    f"≈  {_fmt(apprenti)}",
+                    f"✗  {_fmt(unqualified)}",
+                ]
+
+                for band in range(5):
+                    col_vals[j][base + band]       = texts[band]
+                    col_fill[j + 1][base + band]   = BAND_COLORS[band]
+
+        fig = go.Figure(go.Table(
+            columnwidth=[50] + [130] * max_ops,
+            header=dict(
+                values=["<b>Job</b>"] + [f"<b>Op {j+1}</b>" for j in range(max_ops)],
+                fill_color="#2C3E50",
+                font=dict(color="white", size=11),
+                align="center",
+                height=32,
+            ),
+            cells=dict(
+                values=[col_job] + col_vals,
+                fill_color=col_fill,
+                align="center",
+                font=dict(size=10),
+                height=26,
+            ),
+        ))
+
+        fig.update_layout(
+            title=dict(
+                text="Vue d'ensemble des Jobs — Opérations, Métiers, Temps & Workers",
+                font=dict(size=13), x=0.5,
+            ),
+            height=max(400, n_rows * 28 + 120),
+            margin=dict(t=60, b=20, l=20, r=20),
+        )
+
+        if render == "html":
+            fig.write_html("../results/jobs_overview.html", auto_open=True)
+        elif render == "interactif":
+            fig.show()
+        elif render == "notebook":
+            fig.show("png")
+
+        if save_path:
+            fig.write_html(save_path)
+
+        return fig
+
+    def get_difficulty_and_metier_of_task(self, i, j):
+        index_task = self.jobs_struct[i][j]
+        level_task = self.tasks_difficulties[index_task] # niveau de diificulté de la tache 
+        m = self.task_to_m[index_task]
+        return (level_task, m)
+        
 
     def __str__(self):
 
@@ -455,7 +824,8 @@ class Instance:
         for i in range(self.nb_jobs):
             jobs_struct_str += f"Job {i} : "
             for j in range(len(self.jobs_struct[i])):
-                jobs_struct_str += f"\tO_({i},{j}) = {self.jobs_struct[i][j]} "
+                index_task = self.jobs_struct[i][j]
+                jobs_struct_str += f"\tO_({i},{j}) = {self.jobs_struct[i][j]} ({self.tasks_times[index_task][0]:.2f}) "
             jobs_struct_str += "\n"
 
         
@@ -484,3 +854,4 @@ class Instance:
         return res
 
 
+    

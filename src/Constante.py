@@ -2,7 +2,7 @@ COEF_LEARNING = 0.5
 
 LEVEL_MIN = 1
 LEVEL_MAX = 4
-EPS = 0.01
+EPS = 0.0001
 M = 10000
 # temps de la période courante considéré par le PL_i
 BORN_SUP_MAKESPAN = 20 # on se fixe une durée de 20 unités de temps pour réaliser les taches sur la période courante. Les taches qui dépassent cette duré seront considéré comme une pénalité dans le calcul du makespan et pourront être traité dans une autre période
